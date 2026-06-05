@@ -1,0 +1,13 @@
+{
+  "name": "@four-bytes/four-opencode-brain",
+  "version": "0.1.0",
+  "description": "Unified brain plugin — single SQLite DB for RAG search, memory, and knowledge base with content-hash dedup and per-session LRU cache",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "dist/four-opencode-brain.js",
+  "scripts": {
+    "build": "bun build src/four-opencode-brain.ts --outdir=dist --target=bun",
+    "test": "bun test"
+  },
+  "keywords": ["opencode", "opencode-plugin", "four-bytes"]
+}
