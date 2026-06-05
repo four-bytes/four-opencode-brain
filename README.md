@@ -1,3 +1,5 @@
+<img src="icon.svg" alt="four-opencode-brain" width="96" height="96" align="right">
+
 # @four-bytes/four-opencode-brain
 
 > Unified brain plugin for [opencode](https://github.com/opencode-ai/opencode) — single SQLite database for RAG search, session memory, and knowledge base with hybrid search (FTS5 + vec0 vector extension).
