@@ -21,7 +21,7 @@ import { brainSystemPrompt } from "./hooks/system-prompt";
 import { onChatMessage, onSessionIdle } from "./hooks/auto-capture";
 import { installBrainCommands } from "./commands/brain-slash";
 
-const VERSION = "0.2.2";
+const VERSION = "0.2.3";
 const s = tool.schema;
 
 type MemoryInputType = "decision" | "pattern" | "fact" | "preference" | "error";
@@ -44,7 +44,8 @@ export default (async (input: PluginInput) => {
   // ---- Auto-ingest on startup (non-blocking, with toast notifications) ----
   const autoIngest = process.env.BRAIN_AUTO_INGEST?.toLowerCase() !== "false";
   if (autoIngest && directory) {
-    try { client.tui.showToast({ body: { message: `Indexing ${project?.name ?? "project"}…`, variant: "info", title: "Brain" } }).catch(() => {}); } catch {}
+    try { client.tui.showToast({ body: { message: `Indexing ${project?.name ?? "project"}…`, variant: "info", title: "Brain" } }).catch((e) => { process.stderr.write(`[brain] Toast failed: ${e}\n`); }); } catch {}
+    process.stderr.write(`[brain] Indexing ${project?.name ?? "project"}…\n`);
 
     // Fire-and-forget — don't block plugin readiness
     (async () => {
@@ -52,10 +53,12 @@ export default (async (input: PluginInput) => {
       try {
         const result = await ingestPath(ingestDb, directory, { recursive: true, reIndex: false });
         const msg = `Indexed ${result.filesIndexed} new, ${result.filesSkipped} skipped in ${(result.durationMs / 1000).toFixed(1)}s`;
-        try { client.tui.showToast({ body: { message: msg, variant: "success", title: "Brain" } }).catch(() => {}); } catch {}
+        try { client.tui.showToast({ body: { message: msg, variant: "success", title: "Brain" } }).catch((e) => { process.stderr.write(`[brain] Toast failed: ${e}\n`); }); } catch {}
+        process.stderr.write(`[brain] ${msg}\n`);
       } catch (err) {
         const errMsg = `Auto-ingest failed: ${String(err)}`;
-        try { client.tui.showToast({ body: { message: errMsg, variant: "error", title: "Brain" } }).catch(() => {}); } catch {}
+        try { client.tui.showToast({ body: { message: errMsg, variant: "error", title: "Brain" } }).catch((e) => { process.stderr.write(`[brain] Toast failed: ${e}\n`); }); } catch {}
+        process.stderr.write(`[brain] ${errMsg}\n`);
       } finally {
         ingestDb.close();
       }
@@ -75,7 +78,7 @@ export default (async (input: PluginInput) => {
     const errDetail = getVec0Error();
     if (errDetail) {
       log("warn", "vec0", `vec0 extension not available — vector search disabled. Chunk search falls back to SQL. (${errDetail})`, { platform: process.platform, arch: process.arch });
-      try { client.tui.showToast({ body: { message: `vec0 extension unavailable — vector search disabled: ${errDetail}`, variant: "error", title: "Brain" } }).catch(() => {}); } catch {}
+      try { client.tui.showToast({ body: { message: `vec0 extension unavailable — vector search disabled: ${errDetail}`, variant: "error", title: "Brain" } }).catch((e) => { process.stderr.write(`[brain] Toast failed: ${e}\n`); }); } catch {}
     }
     checkDb.close();
   }
