@@ -22,7 +22,7 @@ import { onChatMessage, onSessionIdle } from "./hooks/auto-capture";
 import { installBrainCommands } from "./commands/brain-slash";
 
 import { readFileSync } from "fs";
-import { join } from "path";
+import { basename, join } from "path";
 
 const VERSION: string = JSON.parse(
   readFileSync(join(import.meta.dir, "..", "package.json"), "utf-8")
@@ -97,14 +97,34 @@ export default (async (input: PluginInput) => {
       recursive: s.boolean().optional().describe("Recurse into subdirectories (default: true)"),
       reIndex: s.boolean().optional().describe("Force re-index even if unchanged (default: false)"),
     },
-    execute: async (args) => {
+    execute: async (args, toolCtx) => {
       const db = initBrainDatabase();
-      const result = await ingestPath(db, args.path, {
-        recursive: args.recursive !== false,
-        reIndex: args.reIndex === true,
-      });
-      db.close();
-      return JSON.stringify(result);
+      try {
+        const name = basename(args.path);
+        toolCtx.metadata({ title: `Indexing ${name}…` });
+        const result = await ingestPath(db, args.path, {
+          recursive: args.recursive !== false,
+          reIndex: args.reIndex === true,
+        });
+        const msg = `Indexed ${result.filesIndexed} new, ${result.filesSkipped} skipped in ${(result.durationMs / 1000).toFixed(1)}s`;
+        toolCtx.metadata({
+          title: msg,
+          metadata: {
+            filesIndexed: result.filesIndexed,
+            filesSkipped: result.filesSkipped,
+            durationMs: result.durationMs,
+          },
+        });
+        try { client.tui.showToast({ body: { message: msg, variant: "success", title: "Brain Ingest" } }).catch(() => {}); } catch {}
+        return JSON.stringify(result);
+      } catch (err) {
+        const errMsg = `Ingest error: ${String(err)}`;
+        toolCtx.metadata({ title: errMsg });
+        try { client.tui.showToast({ body: { message: errMsg, variant: "error", title: "Brain Ingest" } }).catch(() => {}); } catch {}
+        return JSON.stringify({ error: String(err) });
+      } finally {
+        db.close();
+      }
     },
   });
 
