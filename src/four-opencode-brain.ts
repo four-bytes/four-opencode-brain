@@ -2,7 +2,7 @@ import type { Plugin, PluginInput } from "@opencode-ai/plugin";
 import { tool } from "@opencode-ai/plugin";
 import { sessionCache } from "./cache";
 import { log, setSilent } from "./logger";
-import { openDatabase, createSchema } from "./schema";
+import { initBrainDatabase } from "./schema";
 import { ingestPath } from "./ingest";
 import { embedChunks } from "./ingest/embed";
 import { loadVec0, getVec0Error } from "./embed/extensionLoader";
@@ -21,7 +21,7 @@ import { brainSystemPrompt } from "./hooks/system-prompt";
 import { onChatMessage, onSessionIdle } from "./hooks/auto-capture";
 import { installBrainCommands } from "./commands/brain-slash";
 
-const VERSION = "0.2.1";
+const VERSION = "0.2.2";
 const s = tool.schema;
 
 type MemoryInputType = "decision" | "pattern" | "fact" | "preference" | "error";
@@ -35,8 +35,7 @@ export default (async (input: PluginInput) => {
 
   // Ensure DB + schema on startup
   try {
-    const db = openDatabase();
-    createSchema(db);
+    const db = initBrainDatabase();
     db.close();
   } catch (err) {
     log("error", "schema", `Schema init failed: ${String(err)}`);
@@ -49,8 +48,7 @@ export default (async (input: PluginInput) => {
 
     // Fire-and-forget — don't block plugin readiness
     (async () => {
-      const ingestDb = openDatabase();
-      createSchema(ingestDb);
+      const ingestDb = initBrainDatabase();
       try {
         const result = await ingestPath(ingestDb, directory, { recursive: true, reIndex: false });
         const msg = `Indexed ${result.filesIndexed} new, ${result.filesSkipped} skipped in ${(result.durationMs / 1000).toFixed(1)}s`;
@@ -73,10 +71,9 @@ export default (async (input: PluginInput) => {
 
   // Check vec0 extension availability (logged once per session)
   {
-    const checkDb = openDatabase();
-    createSchema(checkDb);
-    if (!loadVec0(checkDb)) {
-      const errDetail = getVec0Error() ?? "extension not found";
+    const checkDb = initBrainDatabase();
+    const errDetail = getVec0Error();
+    if (errDetail) {
       log("warn", "vec0", `vec0 extension not available — vector search disabled. Chunk search falls back to SQL. (${errDetail})`, { platform: process.platform, arch: process.arch });
       try { client.tui.showToast({ body: { message: `vec0 extension unavailable — vector search disabled: ${errDetail}`, variant: "error", title: "Brain" } }).catch(() => {}); } catch {}
     }
@@ -93,8 +90,7 @@ export default (async (input: PluginInput) => {
       reIndex: s.boolean().optional().describe("Force re-index even if unchanged (default: false)"),
     },
     execute: async (args) => {
-      const db = openDatabase();
-      createSchema(db);
+      const db = initBrainDatabase();
       const result = await ingestPath(db, args.path, {
         recursive: args.recursive !== false,
         reIndex: args.reIndex === true,
@@ -113,8 +109,7 @@ export default (async (input: PluginInput) => {
       contentType: s.string().optional().describe("document|memory|knowledge|chunk|all"),
     },
     execute: async (args) => {
-      const db = openDatabase();
-      createSchema(db);
+      const db = initBrainDatabase();
       const results = brainSearch(db, args.query, {
         filters: args.filters,
         limit: args.limit ?? 20,
@@ -134,8 +129,7 @@ export default (async (input: PluginInput) => {
     description: "Rebuild vec0 vector index from chunks.",
     args: {},
     execute: async () => {
-      const db = openDatabase();
-      createSchema(db);
+      const db = initBrainDatabase();
       try {
         db.run("DROP TABLE IF EXISTS chunks_vec");
         db.run(`
@@ -187,8 +181,7 @@ export default (async (input: PluginInput) => {
       id: s.string().optional(),
     },
     execute: async (args) => {
-      const db = openDatabase();
-      createSchema(db);
+      const db = initBrainDatabase();
       try {
         switch (args.mode) {
           case "add":
@@ -249,8 +242,7 @@ export default (async (input: PluginInput) => {
       kind: s.string().optional().describe("Entry kind"),
     },
     execute: async (args) => {
-      const db = openDatabase();
-      createSchema(db);
+      const db = initBrainDatabase();
       try {
         const entry = kbGet(db, args.entry_key, args.kind);
         return JSON.stringify(entry ?? { error: "not found" });
@@ -275,8 +267,7 @@ export default (async (input: PluginInput) => {
       review_state: s.string().optional(),
     },
     execute: async (args) => {
-      const db = openDatabase();
-      createSchema(db);
+      const db = initBrainDatabase();
       try {
         const result = kbAdd(db, {
           entry_key: (args.entry_key as string) ?? deriveEntryKey(args.title as string),
@@ -310,8 +301,7 @@ export default (async (input: PluginInput) => {
       observed_symptoms: s.string().optional(),
     },
     execute: async (args) => {
-      const db = openDatabase();
-      createSchema(db);
+      const db = initBrainDatabase();
       try {
         const occurrence = kbRecord(db, {
           entry_key: args.entry_key as string,
@@ -339,8 +329,7 @@ export default (async (input: PluginInput) => {
       confidence: s.number().optional(),
     },
     execute: async (args) => {
-      const db = openDatabase();
-      createSchema(db);
+      const db = initBrainDatabase();
       try {
         const entry = kbReview(db, {
           entry_key: args.entry_key as string,
