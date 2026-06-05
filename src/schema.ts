@@ -3,6 +3,7 @@ import { mkdirSync } from "fs";
 import { homedir } from "os";
 import { join, dirname } from "path";
 import { log } from "./logger";
+import { loadVec0 } from "./embed/extensionLoader";
 
 // ---------------------------------------------------------------------------
 // UUID7-style ID: 12 hex chars of timestamp + 20 hex chars random
@@ -32,6 +33,17 @@ export function openDatabase(dbPath?: string): Database {
   const db = new Database(resolvedPath);
   db.exec("PRAGMA journal_mode=WAL;");
   db.exec("PRAGMA foreign_keys=ON;");
+  return db;
+}
+
+/**
+ * Open the brain database, load the vec0 extension, and create the schema.
+ * This is the single entry point — ensures vec0 is loaded before schema creation.
+ */
+export function initBrainDatabase(dbPath?: string): Database {
+  const db = openDatabase(dbPath);
+  loadVec0(db);
+  createSchema(db);
   return db;
 }
 
