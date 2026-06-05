@@ -20,8 +20,8 @@ For local dev guidance, see `AGENTS.local.md` (gitignored, machine-specific).
 - `src/hooks/` — Unified system prompt + auto-capture triggers
 
 ## Embedding Pipeline
-- Vec0 extension: v0.1.9, built from `vendor/sqlite-vec/`
-- Priority: local build (`dist/extensions/<platform>/vec0.so`) > cache
+- Vec0 extension: v0.1.9, downloaded from GitHub Releases, cached in `.cache/`
+- Priority: bundled prebuilt binary (`dist/extensions/<platform>/vec0.so`)
 - Embedding model: placeholder (hash-based pseudo-embedding, 384-dim)
 - Real embedding model → follow-up wave
 
