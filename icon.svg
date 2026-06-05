@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <!-- Background rounded rect -->
+  <rect x="4" y="4" width="120" height="120" rx="24" ry="24" fill="#1a365d"/>
+
+  <!-- Brain hemisphere outline (left) -->
+  <path d="M32 52 C32 36, 44 28, 56 32 C60 33, 64 36, 64 42 L64 80 C64 86, 60 90, 56 92 C44 96, 32 88, 32 72 Z"
+        fill="none" stroke="#3182ce" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- Brain hemisphere outline (right) -->
+  <path d="M96 52 C96 36, 84 28, 72 32 C68 33, 64 36, 64 42 L64 80 C64 86, 68 90, 72 92 C84 96, 96 88, 96 72 Z"
+        fill="none" stroke="#3182ce" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- Brain sulci/gyri lines (left hemisphere) -->
+  <path d="M40 48 L48 44 L44 54 L52 50"
+        fill="none" stroke="#63b3ed" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M38 66 L46 62 L42 72 L50 68"
+        fill="none" stroke="#63b3ed" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M44 82 L52 78"
+        fill="none" stroke="#63b3ed" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- Brain sulci/gyri lines (right hemisphere) -->
+  <path d="M88 48 L80 44 L84 54 L76 50"
+        fill="none" stroke="#63b3ed" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M90 66 L82 62 L86 72 L78 68"
+        fill="none" stroke="#63b3ed" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M84 82 L76 78"
+        fill="none" stroke="#63b3ed" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- Central node (corpus callosum / connection hub) -->
+  <circle cx="64" cy="62" r="6" fill="#63b3ed"/>
+  <circle cx="64" cy="62" r="3" fill="#1a365d"/>
+
+  <!-- Neural network connection lines from central node -->
+  <!-- Top-left -->
+  <line x1="60" y1="57" x2="28" y2="28" stroke="#3182ce" stroke-width="1.5" stroke-dasharray="3,2"/>
+  <!-- Top-right -->
+  <line x1="68" y1="57" x2="100" y2="28" stroke="#3182ce" stroke-width="1.5" stroke-dasharray="3,2"/>
+  <!-- Bottom-left -->
+  <line x1="60" y1="67" x2="28" y2="100" stroke="#3182ce" stroke-width="1.5" stroke-dasharray="3,2"/>
+  <!-- Bottom-right -->
+  <line x1="68" y1="67" x2="100" y2="100" stroke="#3182ce" stroke-width="1.5" stroke-dasharray="3,2"/>
+
+  <!-- Four corner nodes ("four bytes" / plugin connections) -->
+  <circle cx="24" cy="24" r="5" fill="#3182ce"/>
+  <circle cx="24" cy="24" r="2.5" fill="#63b3ed"/>
+
+  <circle cx="104" cy="24" r="5" fill="#3182ce"/>
+  <circle cx="104" cy="24" r="2.5" fill="#63b3ed"/>
+
+  <circle cx="24" cy="104" r="5" fill="#3182ce"/>
+  <circle cx="24" cy="104" r="2.5" fill="#63b3ed"/>
+
+  <circle cx="104" cy="104" r="5" fill="#3182ce"/>
+  <circle cx="104" cy="104" r="2.5" fill="#63b3ed"/>
+
+  <!-- Small circuit-like ornament: 4 dots across top of brain -->
+  <circle cx="48" cy="30" r="1.5" fill="#63b3ed" opacity="0.6"/>
+  <circle cx="56" cy="28" r="1.5" fill="#63b3ed" opacity="0.6"/>
+  <circle cx="72" cy="28" r="1.5" fill="#63b3ed" opacity="0.6"/>
+  <circle cx="80" cy="30" r="1.5" fill="#63b3ed" opacity="0.6"/>
+</svg>

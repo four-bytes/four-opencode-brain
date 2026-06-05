@@ -1,6 +1,6 @@
 # four-opencode-brain — AGENTS.md
 
-Pointer to central standards: `~/.personal-config/ai-shared/AGENTS.md` and meta-repo `~/four-opencode-plugins/AGENTS.md`.
+For local dev guidance, see `AGENTS.local.md` (gitignored, machine-specific).
 
 ## Convention
 - Source file: `src/four-opencode-brain.ts` (NOT `src/index.ts`)
@@ -20,8 +20,8 @@ Pointer to central standards: `~/.personal-config/ai-shared/AGENTS.md` and meta-
 - `src/hooks/` — Unified system prompt + auto-capture triggers
 
 ## Embedding Pipeline
-- Vec0 extension: v0.1.9, built from `vendor/sqlite-vec/`
-- Priority: local build (`dist/extensions/<platform>/vec0.so`) > cache
+- Vec0 extension: v0.1.9, downloaded from GitHub Releases, cached in `.cache/`
+- Priority: bundled prebuilt binary (`dist/extensions/<platform>/vec0.so`)
 - Embedding model: placeholder (hash-based pseudo-embedding, 384-dim)
 - Real embedding model → follow-up wave
 
@@ -36,7 +36,6 @@ Pointer to central standards: `~/.personal-config/ai-shared/AGENTS.md` and meta-
 - `dist/` is gitignored, freshly built on `npm publish`
 
 ## Standards
-`~/.personal-config/ai-shared/AGENTS.md`
 
 ## This Plugin
 - Plugin name: brain
