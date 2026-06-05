@@ -45,6 +45,7 @@ export default (async (input: PluginInput) => {
   const autoIngest = process.env.BRAIN_AUTO_INGEST?.toLowerCase() !== "false";
   if (autoIngest && directory) {
     try { client.tui.showToast({ body: { message: `Indexing ${project?.name ?? "project"}…`, variant: "info", title: "Brain" } }).catch(() => {}); } catch {}
+    process.stderr.write(`[brain] Indexing ${project?.name ?? "project"}…\n`);
 
     // Fire-and-forget — don't block plugin readiness
     (async () => {
@@ -53,9 +54,11 @@ export default (async (input: PluginInput) => {
         const result = await ingestPath(ingestDb, directory, { recursive: true, reIndex: false });
         const msg = `Indexed ${result.filesIndexed} new, ${result.filesSkipped} skipped in ${(result.durationMs / 1000).toFixed(1)}s`;
         try { client.tui.showToast({ body: { message: msg, variant: "success", title: "Brain" } }).catch(() => {}); } catch {}
+        process.stderr.write(`[brain] ${msg}\n`);
       } catch (err) {
         const errMsg = `Auto-ingest failed: ${String(err)}`;
         try { client.tui.showToast({ body: { message: errMsg, variant: "error", title: "Brain" } }).catch(() => {}); } catch {}
+        process.stderr.write(`[brain] ${errMsg}\n`);
       } finally {
         ingestDb.close();
       }
