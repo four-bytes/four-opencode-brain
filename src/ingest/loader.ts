@@ -5,6 +5,7 @@
 import { readdir, stat } from "fs/promises";
 import { extname, join } from "path";
 import os from "os";
+import { log } from "../logger";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -78,7 +79,8 @@ export async function walkDirectory(
     let entries: string[];
     try {
       entries = await readdir(currentPath);
-    } catch {
+    } catch (err) {
+      log("warn", "walker", `Failed to read directory ${currentPath}: ${String(err)}`);
       return;
     }
 
@@ -90,7 +92,8 @@ export async function walkDirectory(
       let stats;
       try {
         stats = await stat(fullPath);
-      } catch {
+      } catch (err) {
+        log("warn", "walker", `Failed to stat ${fullPath}: ${String(err)}`);
         continue;
       }
 

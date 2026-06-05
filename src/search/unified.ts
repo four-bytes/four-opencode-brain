@@ -277,7 +277,7 @@ function searchVec0(
 
     // KNN search via vec0 virtual table
     const rows = db
-      .query<{ chunk_id: string; distance: number }, [ArrayBuffer, number]>(
+      .query<{ chunk_id: string; distance: number }, [Uint8Array, number]>(
         `SELECT chunk_id, distance
          FROM chunks_vec
          WHERE embedding MATCH ?

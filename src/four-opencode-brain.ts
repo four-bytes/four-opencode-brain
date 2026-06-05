@@ -22,7 +22,7 @@ import { onChatMessage, onSessionIdle } from "./hooks/auto-capture";
 import { installBrainCommands } from "./commands/brain-slash";
 
 import { readFileSync } from "fs";
-import { basename, join } from "path";
+import { basename, join, resolve, isAbsolute } from "path";
 
 const VERSION: string = JSON.parse(
   readFileSync(join(import.meta.dir, "..", "package.json"), "utf-8")
@@ -30,6 +30,23 @@ const VERSION: string = JSON.parse(
 const s = tool.schema;
 
 type MemoryInputType = "decision" | "pattern" | "fact" | "preference" | "error";
+
+/**
+ * TUI toast notification — silently handles all errors.
+ * Matches RAG plugin pattern: never breaks plugin operation on UI failure.
+ */
+function showToast(
+  client: PluginInput["client"],
+  message: string,
+  variant: "info" | "success" | "warning" | "error" = "info",
+  title?: string,
+): void {
+  try {
+    client.tui.showToast({ body: { message, variant, ...(title ? { title } : {}) } }).catch(() => {});
+  } catch {
+    // Never let UI errors break plugin operation
+  }
+}
 
 export default (async (input: PluginInput) => {
   const { client, project, directory, $ } = input;
@@ -49,8 +66,8 @@ export default (async (input: PluginInput) => {
   // ---- Auto-ingest on startup (non-blocking, with toast notifications) ----
   const autoIngest = process.env.BRAIN_AUTO_INGEST?.toLowerCase() !== "false";
   if (autoIngest && directory) {
-    try { client.tui.showToast({ body: { message: `Indexing ${project?.name ?? "project"}…`, variant: "info", title: "Brain" } }).catch((e) => { process.stderr.write(`[brain] Toast failed: ${e}\n`); }); } catch {}
-    process.stderr.write(`[brain] Indexing ${project?.name ?? "project"}…\n`);
+    showToast(client, `Indexing ${project?.name ?? "project"}…`, "info", "Brain");
+    process.stderr.write(`[brain] Auto-ingest: ${directory}\n`);
 
     // Fire-and-forget — don't block plugin readiness
     (async () => {
@@ -58,11 +75,11 @@ export default (async (input: PluginInput) => {
       try {
         const result = await ingestPath(ingestDb, directory, { recursive: true, reIndex: false });
         const msg = `Indexed ${result.filesIndexed} new, ${result.filesSkipped} skipped in ${(result.durationMs / 1000).toFixed(1)}s`;
-        try { client.tui.showToast({ body: { message: msg, variant: "success", title: "Brain" } }).catch((e) => { process.stderr.write(`[brain] Toast failed: ${e}\n`); }); } catch {}
-        process.stderr.write(`[brain] ${msg}\n`);
+        showToast(client, msg, "success", "Brain");
+        process.stderr.write(`[brain] ${msg}  (${directory})\n`);
       } catch (err) {
         const errMsg = `Auto-ingest failed: ${String(err)}`;
-        try { client.tui.showToast({ body: { message: errMsg, variant: "error", title: "Brain" } }).catch((e) => { process.stderr.write(`[brain] Toast failed: ${e}\n`); }); } catch {}
+        showToast(client, errMsg, "error", "Brain");
         process.stderr.write(`[brain] ${errMsg}\n`);
       } finally {
         ingestDb.close();
@@ -83,7 +100,7 @@ export default (async (input: PluginInput) => {
     const errDetail = getVec0Error();
     if (errDetail) {
       log("warn", "vec0", `vec0 extension not available — vector search disabled. Chunk search falls back to SQL. (${errDetail})`, { platform: process.platform, arch: process.arch });
-      try { client.tui.showToast({ body: { message: `vec0 extension unavailable — vector search disabled: ${errDetail}`, variant: "error", title: "Brain" } }).catch((e) => { process.stderr.write(`[brain] Toast failed: ${e}\n`); }); } catch {}
+      showToast(client, `vec0 extension unavailable — vector search disabled: ${errDetail}`, "error", "Brain");
     }
     checkDb.close();
   }
@@ -100,9 +117,11 @@ export default (async (input: PluginInput) => {
     execute: async (args, toolCtx) => {
       const db = initBrainDatabase();
       try {
-        const name = basename(args.path);
+        // Resolve path relative to project directory (like RAG plugin does)
+        const resolvedPath = resolve(toolCtx.directory, args.path);
+        const name = basename(resolvedPath);
         toolCtx.metadata({ title: `Indexing ${name}…` });
-        const result = await ingestPath(db, args.path, {
+        const result = await ingestPath(db, resolvedPath, {
           recursive: args.recursive !== false,
           reIndex: args.reIndex === true,
         });
@@ -115,12 +134,12 @@ export default (async (input: PluginInput) => {
             durationMs: result.durationMs,
           },
         });
-        try { client.tui.showToast({ body: { message: msg, variant: "success", title: "Brain Ingest" } }).catch(() => {}); } catch {}
+        showToast(client, msg, "success", "Brain Ingest");
         return JSON.stringify(result);
       } catch (err) {
         const errMsg = `Ingest error: ${String(err)}`;
         toolCtx.metadata({ title: errMsg });
-        try { client.tui.showToast({ body: { message: errMsg, variant: "error", title: "Brain Ingest" } }).catch(() => {}); } catch {}
+        showToast(client, errMsg, "error", "Brain Ingest");
         return JSON.stringify({ error: String(err) });
       } finally {
         db.close();
