@@ -1,14 +1,12 @@
 // ---------------------------------------------------------------------------
-// Vec0 extension loader — loads the vec0 SQLite extension with priority:
-// 1. Local build (dist/extensions/<platform>/vec0.so)
-// 2. Cache fallback (~/.local/share/four-opencode-brain/extensions/...)
-// 3. Graceful failure (no crash if extension missing)
+// Vec0 extension loader — loads the vec0 SQLite extension from the build
+// output at dist/extensions/<platform>/vec0.so (produced by scripts/build-vec.sh).
+// No cache fallback — only the shipped build output is used.
 // ---------------------------------------------------------------------------
 
 import { join } from "path";
 import { existsSync } from "fs";
 import type { Database } from "bun:sqlite";
-import { homedir } from "os";
 
 /**
  * Platform directory name for SQLite extensions.
@@ -35,60 +33,67 @@ function extSuffix(): string {
 
 /**
  * Try to load vec0 extension into the given database handle.
- * Returns true if loaded successfully, false if extension not found.
+ * Looks only at dist/extensions/<platform>/vec0.<ext> — the shipped build output.
+ * Returns true if loaded successfully, false if extension not found or load failed.
  * Maintains a static loaded flag to avoid redundant loadExtension calls.
  */
 let loaded = false;
+
+/**
+ * Error message from the last load attempt, for diagnostics.
+ */
+let lastError: string | null = null;
 
 export function loadVec0(db: Database): boolean {
   if (loaded) return true;
 
   const pDir = platformDir();
-  if (!pDir) return false;
+  if (!pDir) {
+    lastError = `Unsupported platform: ${process.platform}-${process.arch}`;
+    return false;
+  }
 
   const ext = extSuffix();
   const initFn = "sqlite3_vec_init";
 
-  // Priority 1: Local build alongside the plugin
-  const localPath = join(
-    import.meta.dir ?? __dirname,
-    "..",
-    "dist",
-    "extensions",
-    pDir,
-    `vec0.${ext}`,
-  );
-  if (existsSync(localPath)) {
-    try {
-      db.loadExtension(localPath, initFn);
-      loaded = true;
-      return true;
-    } catch {
-      // Silently fall through
+  // Try both locations for the extension:
+  // 1. Bundled: dist/extensions/<platform>/vec0.<ext> (import.meta.dir = dist/)
+  // 2. Source:  ../../dist/extensions/<platform>/vec0.<ext> (import.meta.dir = src/embed/)
+  const resolved = import.meta.dir ?? __dirname;
+  const candidates = [
+    join(resolved, "extensions", pDir, `vec0.${ext}`),
+    join(resolved, "..", "..", "dist", "extensions", pDir, `vec0.${ext}`),
+  ];
+  
+  let localPath = "";
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) {
+      localPath = candidate;
+      break;
     }
   }
 
-  // Priority 2: Cache in user home
-  const cachePath = join(
-    homedir(),
-    ".local",
-    "share",
-    "four-opencode-brain",
-    "extensions",
-    pDir,
-    `vec0.${ext}`,
-  );
-  if (existsSync(cachePath)) {
-    try {
-      db.loadExtension(cachePath, initFn);
-      loaded = true;
-      return true;
-    } catch {
-      // Silently fall through
-    }
+  if (!localPath) {
+    lastError = `Extension not found (tried: ${candidates.join(", ")})`;
+    return false;
   }
 
-  return false;
+  try {
+    db.loadExtension(localPath, initFn);
+    loaded = true;
+    lastError = null;
+    return true;
+  } catch (err: unknown) {
+    lastError = `Failed to load vec0 extension: ${err instanceof Error ? err.message : String(err)}`;
+    return false;
+  }
+}
+
+/**
+ * Get the last error message from a failed load attempt.
+ */
+export function getVec0Error(): string | null {
+  return lastError;
 }
 
 /**
@@ -96,4 +101,5 @@ export function loadVec0(db: Database): boolean {
  */
 export function resetVec0Loaded(): void {
   loaded = false;
+  lastError = null;
 }

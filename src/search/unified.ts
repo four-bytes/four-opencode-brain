@@ -300,6 +300,82 @@ function searchVec0(
 }
 
 // ---------------------------------------------------------------------------
+// Chunk SQL fallback — direct LIKE search on chunks table
+// Used when vec0 vector search is unavailable (no extension loaded).
+// ---------------------------------------------------------------------------
+
+function searchChunksFallback(
+  db: Database,
+  query: string,
+  maxResults: number,
+  filters: ParsedFilters,
+): SearchResult[] {
+  try {
+    let sql = `
+      SELECT c.id, c.chunk_index, c.content, c.symbol, c.kind,
+             c.chunk_type, c.start_line, c.end_line,
+             d.path AS source_path, d.title AS doc_title
+      FROM chunks c
+      JOIN documents d ON d.id = c.document_id
+      WHERE c.content LIKE ?
+    `;
+    const params: unknown[] = [`%${query}%`];
+
+    if (filters.language) {
+      sql += " AND d.language = ?";
+      params.push(filters.language);
+    }
+    if (filters.path) {
+      sql += " AND d.path LIKE ?";
+      params.push(`${filters.path}%`);
+    }
+    if (filters.kind) {
+      sql += " AND c.kind = ?";
+      params.push(filters.kind);
+    }
+
+    sql += " ORDER BY c.chunk_index LIMIT ?";
+    params.push(maxResults);
+
+    const rows = db.query(sql).all(...params) as Array<{
+      id: string;
+      chunk_index: number;
+      content: string;
+      symbol: string | null;
+      kind: string | null;
+      chunk_type: string;
+      start_line: number | null;
+      end_line: number | null;
+      source_path: string;
+      doc_title: string;
+    }>;
+
+    return rows.map((r) => {
+      // Create a brief excerpt from the chunk content
+      const excerpt = r.content.length > 80
+        ? r.content.slice(0, 80) + "..."
+        : r.content;
+      return {
+        id: r.id,
+        title: r.symbol ?? `${r.doc_title}:${r.chunk_type}#${r.chunk_index}`,
+        excerpt,
+        score: 0,
+        content_type: "chunk" as const,
+        source_path: r.source_path ?? undefined,
+        metadata: {
+          kind: r.kind ?? undefined,
+          chunk_type: r.chunk_type,
+          start_line: r.start_line ?? undefined,
+          end_line: r.end_line ?? undefined,
+        },
+      };
+    });
+  } catch {
+    return [];
+  }
+}
+
+// ---------------------------------------------------------------------------
 // RRF Fusion (Reciprocal Rank Fusion)
 // ---------------------------------------------------------------------------
 
@@ -376,17 +452,23 @@ export function brainSearch(
     ftsLists.push(ftsSearchKnowledge(db, query, filters, limit));
   }
 
-  // Vec0 chunk search (optional)
-  const useVec0 = (ct === "all" || ct === "chunk") && hasVec0Table(db);
-  const vecResults = useVec0 ? searchVec0(db, query, limit) : [];
+  // Vec0 chunk search (optional); fall back to SQL LIKE if vec0 unavailable
+  let chunkResults: SearchResult[] = [];
+  if (ct === "all" || ct === "chunk") {
+    if (hasVec0Table(db) && loadVec0(db)) {
+      chunkResults = searchVec0(db, query, limit);
+    } else {
+      chunkResults = searchChunksFallback(db, query, limit, filters);
+    }
+  }
 
   let results: SearchResult[];
-  if (vecResults.length > 0) {
-    // RRF fusion with vec0
-    ftsLists.push(vecResults);
+  if (chunkResults.length > 0) {
+    // RRF fusion with chunk results
+    ftsLists.push(chunkResults);
     results = rrfFusion(ftsLists, 60);
   } else {
-    // Without vec0, concatenate FTS5 lists in source order
+    // Without chunk results, concatenate FTS5 lists in source order
     results = ftsLists.flat().slice(0, limit);
   }
 

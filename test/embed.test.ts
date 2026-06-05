@@ -5,7 +5,7 @@
 import { expect, test, describe } from "bun:test";
 import { Database } from "bun:sqlite";
 import { generateEmbedding, float32ToBlob, blobToFloat32, embedChunks } from "../src/ingest/embed";
-import { loadVec0, resetVec0Loaded } from "../src/embed/extensionLoader";
+import { loadVec0, resetVec0Loaded, getVec0Error } from "../src/embed/extensionLoader";
 import { createSchema, generateId, hashContent } from "../src/schema";
 
 // ---------------------------------------------------------------------------
@@ -13,22 +13,23 @@ import { createSchema, generateId, hashContent } from "../src/schema";
 // ---------------------------------------------------------------------------
 
 describe("loadVec0", () => {
-  test("returns false in test environment (no vec0 binary)", () => {
-    // In the test environment, the vec0 binary is not loaded
-    // We use :memory: DB which cannot load extensions anyway
+  test("loads vec0 from dual-path resolution (dist/extensions/...)", () => {
+    // After build, dist/extensions/<platform>/vec0.so exists and is loadable
     const db = new Database(":memory:");
     resetVec0Loaded();
-    // loadVec0 tries local dist/extensions path which won't match the test CWD
-    expect(loadVec0(db)).toBe(false);
+    expect(loadVec0(db)).toBe(true);
     db.close();
   });
 
-  test("returns false for unknown platform", () => {
-    // Can't really change process.platform in tests, but we can test the logic
-    // by checking the extension loader code path
+  test("loaded flag prevents redundant loadExtension calls", () => {
     const db = new Database(":memory:");
     resetVec0Loaded();
-    expect(loadVec0(db)).toBe(false);
+    // First call loads the extension
+    expect(loadVec0(db)).toBe(true);
+    // Second call returns true immediately (loaded flag)
+    expect(loadVec0(db)).toBe(true);
+    // getVec0Error returns null after successful load
+    expect(getVec0Error()).toBeNull();
     db.close();
   });
 });

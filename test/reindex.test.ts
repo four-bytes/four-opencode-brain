@@ -40,11 +40,11 @@ describe("brain_reindex — tool definition", () => {
       directory: "/tmp",
       $: {} as any,
     });
-    const tool = result.tools.find((t) => t.name === "brain_reindex");
+    expect(result.tool).toHaveProperty("brain_reindex");
+    const tool = result.tool.brain_reindex;
     expect(tool).toBeDefined();
-    expect(tool!.name).toBe("brain_reindex");
-    expect(tool!.description).toContain("Rebuild vec0 vector index");
-    expect(tool!.parameters.required).toEqual([]);
+    expect(tool.description).toContain("Rebuild vec0 vector index");
+    expect(tool.args).toEqual({});
   });
 });
 
