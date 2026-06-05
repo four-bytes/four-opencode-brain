@@ -9,5 +9,11 @@
     "build": "bun build src/four-opencode-brain.ts --outdir=dist --target=bun",
     "test": "bun test"
   },
-  "keywords": ["opencode", "opencode-plugin", "four-bytes"]
+  "keywords": ["opencode", "opencode-plugin", "four-bytes"],
+  "dependencies": {
+    "tree-sitter-javascript": "^0.23.0",
+    "tree-sitter-php": "^0.24.2",
+    "tree-sitter-typescript": "^0.23.2",
+    "web-tree-sitter": "^0.26.9"
+  }
 }
