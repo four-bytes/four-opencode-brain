@@ -1,6 +1,6 @@
 # four-opencode-brain — AGENTS.md
 
-Pointer to central standards: `~/.personal-config/ai-shared/AGENTS.md` and meta-repo `~/four-opencode-plugins/AGENTS.md`.
+For local dev guidance, see `AGENTS.local.md` (gitignored, machine-specific).
 
 ## Convention
 - Source file: `src/four-opencode-brain.ts` (NOT `src/index.ts`)
@@ -36,7 +36,6 @@ Pointer to central standards: `~/.personal-config/ai-shared/AGENTS.md` and meta-
 - `dist/` is gitignored, freshly built on `npm publish`
 
 ## Standards
-`~/.personal-config/ai-shared/AGENTS.md`
 
 ## This Plugin
 - Plugin name: brain

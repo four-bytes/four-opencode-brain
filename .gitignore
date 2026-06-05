@@ -7,3 +7,4 @@ bun.lockb
 .DS_Store
 build/
 vendor/sqlite-vec/
+*.local.md
