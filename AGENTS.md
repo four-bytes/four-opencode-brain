@@ -19,6 +19,12 @@ Pointer to central standards: `~/.personal-config/ai-shared/AGENTS.md` and meta-
 - `src/logger.ts` — Throttled, rate-limited, compact JSON
 - `src/hooks/` — Unified system prompt + auto-capture triggers
 
+## Embedding Pipeline
+- Vec0 extension: v0.1.9, built from `vendor/sqlite-vec/`
+- Priority: local build (`dist/extensions/<platform>/vec0.so`) > cache
+- Embedding model: placeholder (hash-based pseudo-embedding, 384-dim)
+- Real embedding model → follow-up wave
+
 ## Token Budget (HARD)
 - Total tool descriptions + system prompt ≤400 tokens
 - All JSON responses compact (no `null, 2`)

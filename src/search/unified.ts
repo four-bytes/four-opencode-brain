@@ -5,6 +5,8 @@
 
 import { Database } from "bun:sqlite";
 import { sessionCache } from "../cache";
+import { loadVec0 } from "../embed/extensionLoader";
+import { generateEmbedding, float32ToBlob } from "../ingest/embed";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -244,7 +246,7 @@ function ftsSearchKnowledge(
 }
 
 // ---------------------------------------------------------------------------
-// Vec0 vector search (optional — placeholder until embeddings are available)
+// Vec0 vector search — KNN via sqlite-vec extension
 // ---------------------------------------------------------------------------
 
 function hasVec0Table(db: Database): boolean {
@@ -261,13 +263,40 @@ function hasVec0Table(db: Database): boolean {
 }
 
 function searchVec0(
-  _db: Database,
-  _query: string,
-  _maxResults: number,
+  db: Database,
+  query: string,
+  maxResults: number,
 ): SearchResult[] {
-  // Placeholder: embedding computation returns null for now.
-  // Will be implemented in a follow-up with actual embedding model.
-  return [];
+  // Ensure vec0 extension is loaded
+  if (!loadVec0(db)) return [];
+
+  try {
+    // Generate query embedding
+    const queryVec = generateEmbedding(query);
+    const queryBlob = float32ToBlob(queryVec);
+
+    // KNN search via vec0 virtual table
+    const rows = db
+      .query<{ chunk_id: string; distance: number }, [ArrayBuffer, number]>(
+        `SELECT chunk_id, distance
+         FROM chunks_vec
+         WHERE embedding MATCH ?
+         ORDER BY distance
+         LIMIT ?`,
+      )
+      .all(queryBlob, maxResults);
+
+    return rows.map((row) => ({
+      id: row.chunk_id,
+      title: `vec0:${row.chunk_id.slice(0, 8)}`,
+      excerpt: `[vec0 chunk] distance=${row.distance.toFixed(4)}`,
+      score: Math.max(0, 1 - row.distance), // convert distance to similarity score
+      content_type: "chunk" as const,
+    }));
+  } catch {
+    // vec0 query failed — gracefully degrade to empty results
+    return [];
+  }
 }
 
 // ---------------------------------------------------------------------------

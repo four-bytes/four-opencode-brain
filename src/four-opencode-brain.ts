@@ -3,6 +3,8 @@ import { sessionCache } from "./cache";
 import { log } from "./logger";
 import { openDatabase, createSchema } from "./schema";
 import { ingestPath } from "./ingest";
+import { embedChunks } from "./ingest/embed";
+import { loadVec0 } from "./embed/extensionLoader";
 import { brainSearch } from "./search/unified";
 import { kbGet, kbAdd, kbRecord, kbReview, deriveEntryKey } from "./knowledge/store";
 import type { KbAddInput, KbRecordInput, KbReviewInput } from "./knowledge/store";
@@ -130,8 +132,9 @@ export default (async (input: PluginInput) => {
         },
         execute: async () => {
           const db = openDatabase();
-          // Drop and recreate chunks_vec table
+          createSchema(db);
           try {
+            // Drop and recreate chunks_vec table
             db.run("DROP TABLE IF EXISTS chunks_vec");
             db.run(`
               CREATE VIRTUAL TABLE IF NOT EXISTS chunks_vec USING vec0(
@@ -139,11 +142,30 @@ export default (async (input: PluginInput) => {
                 embedding FLOAT[384]
               )
             `);
-            const chunkCount = db.query("SELECT COUNT(*) as c FROM chunks").get() as { c: number };
-            return JSON.stringify({ ok: true, message: `Vector index rebuilt. ${chunkCount.c} chunks ready for embedding.` });
+
+            // Re-embed all existing chunks
+            const chunkRows = db.query<{ id: string }, []>(
+              "SELECT id FROM chunks",
+            ).all();
+            const totalChunks = chunkRows.length;
+
+            let embedded = 0;
+            if (totalChunks > 0 && loadVec0(db)) {
+              const chunkIds = chunkRows.map((r) => r.id);
+              embedded = embedChunks(db, chunkIds);
+            }
+
+            return JSON.stringify({
+              ok: true,
+              chunks: totalChunks,
+              embedded,
+              message: `Vector index rebuilt. ${embedded}/${totalChunks} chunks embedded.`,
+            });
           } catch (e: unknown) {
             const msg = e instanceof Error ? e.message : String(e);
             return JSON.stringify({ ok: false, error: msg });
+          } finally {
+            db.close();
           }
         }
       },

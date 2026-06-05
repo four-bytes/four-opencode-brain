@@ -23,6 +23,8 @@ import { log } from "../logger";
 import { resolveFiles, detectLanguage } from "./loader";
 import { chunkContent, type Chunk } from "./chunker";
 import { extractSymbols } from "./symbolExtractor";
+import { embedChunks } from "./embed";
+import { loadVec0 } from "../embed/extensionLoader";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -33,6 +35,7 @@ export interface IngestResult {
   filesSkipped: number; // hash match — already indexed
   filesIndexed: number; // new or updated
   chunksCreated: number;
+  chunksEmbedded: number; // chunks successfully embedded into vec0
   documentsCreated: number;
   errors: string[];
   durationMs: number;
@@ -80,6 +83,7 @@ export async function ingestPath(
     filesSkipped: 0,
     filesIndexed: 0,
     chunksCreated: 0,
+    chunksEmbedded: 0,
     documentsCreated: 0,
     errors: [],
     durationMs: 0,
@@ -216,6 +220,7 @@ export async function ingestPath(
       }
 
       // ── 9. Insert chunks ────────────────────────────────────────────
+      const newChunkIds: string[] = [];
       for (const chunk of chunks) {
         try {
           db.run(
@@ -239,11 +244,18 @@ export async function ingestPath(
           );
 
           result.chunksCreated++;
+          newChunkIds.push(chunk.id);
         } catch (err) {
           result.errors.push(
             `Failed to insert chunk ${chunk.chunkIndex} for ${filePath}: ${String(err)}`,
           );
         }
+      }
+
+      // ── 10. Embed chunks (vec0) ─────────────────────────────────────
+      if (newChunkIds.length > 0 && loadVec0(db)) {
+        const embedded = embedChunks(db, newChunkIds);
+        result.chunksEmbedded += embedded;
       }
 
       result.filesIndexed++;
