@@ -5,7 +5,7 @@
 //   caches by content hash, and inserts into chunks_vec
 // - generateEmbedding() produces a deterministic 384-dim vector from
 //   content hash (placeholder until a real embedding model is added)
-// - float32ToBlob() serializes Float32Array to ArrayBuffer for SQLite
+// - float32ToBlob() serializes Float32Array to Uint8Array for SQLite
 // ---------------------------------------------------------------------------
 
 import type { Database } from "bun:sqlite";
@@ -18,21 +18,18 @@ import { log } from "../logger";
 // ---------------------------------------------------------------------------
 
 /**
- * Serialize a Float32Array to an ArrayBuffer suitable for SQLite BLOB storage.
+ * Serialize a Float32Array to a Uint8Array suitable for SQLite BLOB storage.
  * The vec0 extension expects raw 32-bit float data.
  */
-export function float32ToBlob(vec: Float32Array): ArrayBuffer {
-  return vec.buffer.slice(0); // copy to avoid shared reference issues
+export function float32ToBlob(vec: Float32Array): Uint8Array {
+  return new Uint8Array(vec.buffer);
 }
 
 /**
- * Deserialize a BLOB (ArrayBuffer or Buffer) back to Float32Array.
+ * Deserialize a BLOB (Uint8Array) back to Float32Array.
  */
-export function blobToFloat32(blob: ArrayBuffer | Uint8Array): Float32Array {
-  if (blob instanceof Uint8Array) {
-    return new Float32Array(blob.buffer.slice(blob.byteOffset, blob.byteOffset + blob.byteLength));
-  }
-  return new Float32Array(blob);
+export function blobToFloat32(blob: Uint8Array): Float32Array {
+  return new Float32Array(blob.buffer.slice(blob.byteOffset, blob.byteOffset + blob.byteLength));
 }
 
 // ---------------------------------------------------------------------------
@@ -101,7 +98,7 @@ export function embedChunks(db: Database, chunkIds: string[]): number {
     "SELECT content, content_hash FROM chunks WHERE id = ?",
   );
 
-  const insertStmt = db.query<unknown, [string, ArrayBuffer]>(
+  const insertStmt = db.query<unknown, [string, Uint8Array]>(
     "INSERT OR IGNORE INTO chunks_vec (chunk_id, embedding) VALUES (?, ?)",
   );
 
