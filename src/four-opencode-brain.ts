@@ -21,7 +21,12 @@ import { brainSystemPrompt } from "./hooks/system-prompt";
 import { onChatMessage, onSessionIdle } from "./hooks/auto-capture";
 import { installBrainCommands } from "./commands/brain-slash";
 
-const VERSION = "0.2.4";
+import { readFileSync } from "fs";
+import { join } from "path";
+
+const VERSION: string = JSON.parse(
+  readFileSync(join(import.meta.dir, "..", "package.json"), "utf-8")
+).version;
 const s = tool.schema;
 
 type MemoryInputType = "decision" | "pattern" | "fact" | "preference" | "error";
