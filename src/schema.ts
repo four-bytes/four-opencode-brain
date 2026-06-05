@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { mkdirSync } from "fs";
 import { homedir } from "os";
 import { join, dirname } from "path";
+import { log } from "./logger";
 
 // ---------------------------------------------------------------------------
 // UUID7-style ID: 12 hex chars of timestamp + 20 hex chars random
@@ -210,9 +211,7 @@ export function createSchema(db: Database): void {
       )
     `);
   } catch {
-    console.debug(
-      "[brain] vec0 extension not available — skipping chunks_vec table",
-    );
+    log("debug", "schema", "vec0 extension not available — skipping chunks_vec table");
   }
 
   // ---- FTS5 content-sync triggers -----------------------------------------

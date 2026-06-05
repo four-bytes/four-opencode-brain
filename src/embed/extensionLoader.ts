@@ -56,17 +56,25 @@ export function loadVec0(db: Database): boolean {
   const ext = extSuffix();
   const initFn = "sqlite3_vec_init";
 
-  // Shipped build output: dist/extensions/<platform>/vec0.<ext>
-  // import.meta.dir = dist/ (where the bundled plugin runs)
-  const localPath = join(
-    import.meta.dir ?? __dirname,
-    "extensions",
-    pDir,
-    `vec0.${ext}`,
-  );
+  // Try both locations for the extension:
+  // 1. Bundled: dist/extensions/<platform>/vec0.<ext> (import.meta.dir = dist/)
+  // 2. Source:  ../../dist/extensions/<platform>/vec0.<ext> (import.meta.dir = src/embed/)
+  const resolved = import.meta.dir ?? __dirname;
+  const candidates = [
+    join(resolved, "extensions", pDir, `vec0.${ext}`),
+    join(resolved, "..", "..", "dist", "extensions", pDir, `vec0.${ext}`),
+  ];
+  
+  let localPath = "";
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) {
+      localPath = candidate;
+      break;
+    }
+  }
 
-  if (!existsSync(localPath)) {
-    lastError = `Extension not found: ${localPath}`;
+  if (!localPath) {
+    lastError = `Extension not found (tried: ${candidates.join(", ")})`;
     return false;
   }
 

@@ -21,7 +21,7 @@ import { brainSystemPrompt } from "./hooks/system-prompt";
 import { onChatMessage, onSessionIdle } from "./hooks/auto-capture";
 import { installBrainCommands } from "./commands/brain-slash";
 
-const VERSION = "0.2.0";
+const VERSION = "0.2.1";
 const s = tool.schema;
 
 type MemoryInputType = "decision" | "pattern" | "fact" | "preference" | "error";
