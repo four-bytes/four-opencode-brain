@@ -99,6 +99,13 @@ export function getVec0Error(): string | null {
 }
 
 /**
+ * Check whether vec0 has been successfully loaded (at least once).
+ */
+export function isVec0Loaded(): boolean {
+  return loaded;
+}
+
+/**
  * Reset loaded state (useful for testing).
  */
 export function resetVec0Loaded(): void {
