@@ -272,7 +272,7 @@ export async function ingestPath(
 
       // ── 10. Embed chunks (vec0) ─────────────────────────────────────
       if (newChunkIds.length > 0 && loadVec0(db)) {
-        const embedded = embedChunks(db, newChunkIds);
+        const embedded = await embedChunks(db, newChunkIds);
         result.chunksEmbedded += embedded;
       }
 

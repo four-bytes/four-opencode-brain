@@ -115,30 +115,30 @@ describe("float32ToBlob roundtrip", () => {
 // ---------------------------------------------------------------------------
 
 describe("embedChunks", () => {
-  test("returns 0 when vec0 not available", () => {
+  test("returns 0 when vec0 not available", async () => {
     const db = new Database(":memory:");
     createSchema(db);
     // With vec0 not loaded, chunks_vec may or may not exist
     // embedChunks will try loadVec0 inside the embed path — it returns false
     // So we expect 0 embedded
-    const count = embedChunks(db, []);
+    const count = await embedChunks(db, []);
     expect(count).toBe(0);
     db.close();
   });
 
-  test("empty chunk ID list returns 0", () => {
+  test("empty chunk ID list returns 0", async () => {
     const db = new Database(":memory:");
     createSchema(db);
-    expect(embedChunks(db, [])).toBe(0);
+    expect(await embedChunks(db, [])).toBe(0);
     db.close();
   });
 
-  test("non-existent chunk IDs are skipped gracefully", () => {
+  test("non-existent chunk IDs are skipped gracefully", async () => {
     const db = new Database(":memory:");
     createSchema(db);
     const fakeId = generateId();
     // No vec0 loaded, so returns 0
-    const count = embedChunks(db, [fakeId]);
+    const count = await embedChunks(db, [fakeId]);
     expect(count).toBe(0);
     db.close();
   });

@@ -194,8 +194,8 @@ function countByType(results: SearchResult[], type: string): number {
 // ---------------------------------------------------------------------------
 
 describe("brainSearch — FTS5 document search", () => {
-  test("search documents by keyword returns results", () => {
-    const results = brainSearch(db, "greet", {
+  test("search documents by keyword returns results", async () => {
+    const results = await brainSearch(db, "greet", {
       contentType: "document",
       limit: 10,
     });
@@ -205,8 +205,8 @@ describe("brainSearch — FTS5 document search", () => {
     expect(results[0].title).toBe("hello.ts");
   });
 
-  test("search memories by keyword returns results", () => {
-    const results = brainSearch(db, "FTS5", {
+  test("search memories by keyword returns results", async () => {
+    const results = await brainSearch(db, "FTS5", {
       contentType: "memory",
       limit: 10,
     });
@@ -215,8 +215,8 @@ describe("brainSearch — FTS5 document search", () => {
     expect(results[0].content_type).toBe("memory");
   });
 
-  test("search knowledge entries by keyword returns results", () => {
-    const results = brainSearch(db, "memory leak", {
+  test("search knowledge entries by keyword returns results", async () => {
+    const results = await brainSearch(db, "memory leak", {
       contentType: "knowledge",
       limit: 10,
     });
@@ -226,8 +226,8 @@ describe("brainSearch — FTS5 document search", () => {
     expect(results[0].title).toContain("Memory Leak");
   });
 
-  test("search all content types returns results", () => {
-    const results = brainSearch(db, "production", {
+  test("search all content types returns results", async () => {
+    const results = await brainSearch(db, "production", {
       contentType: "all",
       limit: 20,
     });
@@ -238,8 +238,8 @@ describe("brainSearch — FTS5 document search", () => {
 });
 
 describe("brainSearch — filters", () => {
-  test("filter by language: typescript", () => {
-    const results = brainSearch(db, "function", {
+  test("filter by language: typescript", async () => {
+    const results = await brainSearch(db, "function", {
       filters: "language:typescript",
       contentType: "document",
       limit: 10,
@@ -251,8 +251,8 @@ describe("brainSearch — filters", () => {
     }
   });
 
-  test("filter by path: prefix", () => {
-    const results = brainSearch(db, "class", {
+  test("filter by path: prefix", async () => {
+    const results = await brainSearch(db, "class", {
       filters: "path:/src/",
       contentType: "document",
       limit: 10,
@@ -264,8 +264,8 @@ describe("brainSearch — filters", () => {
     }
   });
 
-  test("filter by entity_type: problem", () => {
-    const results = brainSearch(db, "memory", {
+  test("filter by entity_type: problem", async () => {
+    const results = await brainSearch(db, "memory", {
       filters: "entity_type:problem",
       contentType: "knowledge",
       limit: 10,
@@ -277,14 +277,14 @@ describe("brainSearch — filters", () => {
     }
   });
 
-  test("filter by path counts only matching documents", () => {
+  test("filter by path counts only matching documents", async () => {
     // /src/ path matches 2 docs, /README.md matches 1
-    const srcResults = brainSearch(db, "project", {
+    const srcResults = await brainSearch(db, "project", {
       filters: "path:/src/",
       contentType: "document",
       limit: 10,
     });
-    const mdResults = brainSearch(db, "project", {
+    const mdResults = await brainSearch(db, "project", {
       filters: "path:/README.md",
       contentType: "document",
       limit: 10,
@@ -296,8 +296,8 @@ describe("brainSearch — filters", () => {
 });
 
 describe("brainSearch — content type filtering", () => {
-  test("contentType: document only", () => {
-    const results = brainSearch(db, "function", {
+  test("contentType: document only", async () => {
+    const results = await brainSearch(db, "function", {
       contentType: "document",
       limit: 20,
     });
@@ -308,8 +308,8 @@ describe("brainSearch — content type filtering", () => {
     }
   });
 
-  test("contentType: knowledge only", () => {
-    const results = brainSearch(db, "memory", {
+  test("contentType: knowledge only", async () => {
+    const results = await brainSearch(db, "memory", {
       contentType: "knowledge",
       limit: 20,
     });
@@ -322,8 +322,8 @@ describe("brainSearch — content type filtering", () => {
 });
 
 describe("brainSearch — excerpt handling", () => {
-  test("excerpt is stripped of mark tags", () => {
-    const results = brainSearch(db, "greet", {
+  test("excerpt is stripped of mark tags", async () => {
+    const results = await brainSearch(db, "greet", {
       contentType: "document",
       limit: 10,
     });
@@ -336,14 +336,14 @@ describe("brainSearch — excerpt handling", () => {
 });
 
 describe("brainSearch — caching", () => {
-  test("cache hit returns same results reference", () => {
+  test("cache hit returns same results reference", async () => {
     const opts = { query: "deployment", contentType: "memory" as const, limit: 5 };
 
-    const r1 = brainSearch(db, opts.query, {
+    const r1 = await brainSearch(db, opts.query, {
       contentType: opts.contentType,
       limit: opts.limit,
     });
-    const r2 = brainSearch(db, opts.query, {
+    const r2 = await brainSearch(db, opts.query, {
       contentType: opts.contentType,
       limit: opts.limit,
     });
@@ -352,12 +352,12 @@ describe("brainSearch — caching", () => {
     expect(r1).toBe(r2);
   });
 
-  test("different queries produce different cache entries", () => {
-    const r1 = brainSearch(db, "websocket", {
+  test("different queries produce different cache entries", async () => {
+    const r1 = await brainSearch(db, "websocket", {
       contentType: "knowledge",
       limit: 10,
     });
-    const r2 = brainSearch(db, "singleton", {
+    const r2 = await brainSearch(db, "singleton", {
       contentType: "knowledge",
       limit: 10,
     });
@@ -370,40 +370,40 @@ describe("brainSearch — caching", () => {
 });
 
 describe("brainSearch — edge cases", () => {
-  test("empty query returns empty array", () => {
-    const results = brainSearch(db, "", {
+  test("empty query returns empty array", async () => {
+    const results = await brainSearch(db, "", {
       contentType: "all",
       limit: 20,
     });
     expect(results).toEqual([]);
   });
 
-  test("whitespace-only query returns empty array", () => {
-    const results = brainSearch(db, "   ", {
+  test("whitespace-only query returns empty array", async () => {
+    const results = await brainSearch(db, "   ", {
       contentType: "all",
       limit: 20,
     });
     expect(results).toEqual([]);
   });
 
-  test("no results returns empty array (not null/error)", () => {
-    const results = brainSearch(db, "zzz_nonexistent_zzz_xyzzy", {
+  test("no results returns empty array (not null/error)", async () => {
+    const results = await brainSearch(db, "zzz_nonexistent_zzz_xyzzy", {
       contentType: "all",
       limit: 20,
     });
     expect(results).toEqual([]);
   });
 
-  test("results capped at limit", () => {
-    const results = brainSearch(db, "memory", {
+  test("results capped at limit", async () => {
+    const results = await brainSearch(db, "memory", {
       contentType: "all",
       limit: 1,
     });
     expect(results.length).toBeLessThanOrEqual(1);
   });
 
-  test("limit=0 is treated as limit=1", () => {
-    const results = brainSearch(db, "memory", {
+  test("limit=0 is treated as limit=1", async () => {
+    const results = await brainSearch(db, "memory", {
       contentType: "all",
       limit: 0,
     });
@@ -412,8 +412,8 @@ describe("brainSearch — edge cases", () => {
 });
 
 describe("brainSearch — structured filters object", () => {
-  test("structured filters object works", () => {
-    const results = brainSearch(db, "function", {
+  test("structured filters object works", async () => {
+    const results = await brainSearch(db, "function", {
       filters: { language: "typescript" },
       contentType: "document",
       limit: 10,
