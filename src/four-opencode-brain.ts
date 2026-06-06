@@ -443,9 +443,8 @@ export default (async (input: PluginInput) => {
         let text = "";
         try {
           const result = await input.client.session.messages({
-            sessionID,
-            limit: 10,
-            directory,
+            path: { id: sessionID },
+            query: { limit: 10, directory },
           });
           if (result.data) {
             const texts: string[] = [];
