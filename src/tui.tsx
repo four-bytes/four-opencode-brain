@@ -1,7 +1,8 @@
 /** @jsxImportSource @opentui/solid */
 
 import { createSignal, onMount, onCleanup } from "solid-js";
-import type { TuiPlugin } from "@opencode-ai/plugin/tui";
+import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui";
+import type { RGBA } from "@opentui/core";
 import { BRAIN_STATUS_FILE } from "./shared";
 
 const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -19,14 +20,14 @@ interface BrainStatus {
   version?: string;
 }
 
-function BrainStatusBar(props: { centered?: boolean; api: TuiPlugin["api"] }) {
+function BrainStatusBar(props: { centered?: boolean; api: TuiPluginApi }) {
   const [indicator, setIndicator] = createSignal("•");
   const [status, setStatus] = createSignal("");
   const [version, setVersion] = createSignal("");
   const [current, setCurrent] = createSignal(0);
   const [total, setTotal] = createSignal(0);
   const [pct, setPct] = createSignal(0);
-  const [fg, setFg] = createSignal("");
+  const [fg, setFg] = createSignal<string | RGBA>("");
   let pulse = 0;
   let spin = 0;
 

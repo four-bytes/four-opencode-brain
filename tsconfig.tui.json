@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmitOnError": false
+  },
+  "include": [
+    "src/tui.tsx",
+    "src/shared.ts"
+  ]
+}
