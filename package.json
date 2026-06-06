@@ -16,7 +16,7 @@
   ],
   "dependencies": {
     "@opencode-ai/plugin": "^1.15.13",
-    "tree-sitter-javascript": "^0.23.0",
+    "tree-sitter-javascript": "^0.25.0",
     "tree-sitter-php": "^0.24.2",
     "tree-sitter-rust": "^0.23.2",
     "tree-sitter-typescript": "^0.23.2",
