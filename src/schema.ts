@@ -10,7 +10,7 @@ import { loadVec0 } from "./embed/extensionLoader";
 // ---------------------------------------------------------------------------
 
 /** Current schema version for migration tracking. */
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 // ---------------------------------------------------------------------------
 // Integrity checks — PRAGMA + orphan chunk auditing
@@ -158,6 +158,80 @@ export function openDatabase(dbPath?: string): Database {
   return db;
 }
 
+// ---------------------------------------------------------------------------
+// Migration: v2 → v3 — add project_hash to documents, create symbols table
+// ---------------------------------------------------------------------------
+
+/**
+ * Migrate from v2 to v3:
+ * 1. ALTER TABLE documents ADD COLUMN project_hash TEXT NOT NULL DEFAULT 'global'
+ * 2. Create symbols and symbols_fts tables (safe: IF NOT EXISTS)
+ */
+function migrateV2toV3(db: Database): void {
+  try {
+    // Check if column already exists
+    const colInfo = db
+      .query<{ name: string }, []>("PRAGMA table_info(documents)")
+      .all();
+    const hasProjectHash = colInfo.some((c) => c.name === "project_hash");
+    if (!hasProjectHash) {
+      db.exec("ALTER TABLE documents ADD COLUMN project_hash TEXT NOT NULL DEFAULT 'global'");
+    }
+
+    // Create symbols table (IF NOT EXISTS — safe even if already present)
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS symbols (
+        id              TEXT PRIMARY KEY,
+        name            TEXT NOT NULL,
+        qualified_name  TEXT,
+        kind            TEXT,
+        project_hash    TEXT NOT NULL DEFAULT 'global',
+        file_path       TEXT,
+        document_id     TEXT,
+        created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+      )
+    `);
+
+    // Create symbols_fts (IF NOT EXISTS)
+    db.exec(`
+      CREATE VIRTUAL TABLE IF NOT EXISTS symbols_fts USING fts5(
+        name,
+        qualified_name,
+        content='symbols',
+        content_rowid='rowid'
+      )
+    `);
+
+    // Create FTS sync triggers (IF NOT EXISTS)
+    db.exec(`
+      CREATE TRIGGER IF NOT EXISTS symbols_ai AFTER INSERT ON symbols BEGIN
+        INSERT INTO symbols_fts(rowid, name, qualified_name)
+        VALUES (new.rowid, new.name, new.qualified_name);
+      END
+    `);
+
+    db.exec(`
+      CREATE TRIGGER IF NOT EXISTS symbols_ad AFTER DELETE ON symbols BEGIN
+        INSERT INTO symbols_fts(symbols_fts, rowid, name, qualified_name)
+        VALUES ('delete', old.rowid, old.name, old.qualified_name);
+      END
+    `);
+
+    db.exec(`
+      CREATE TRIGGER IF NOT EXISTS symbols_au AFTER UPDATE ON symbols BEGIN
+        INSERT INTO symbols_fts(symbols_fts, rowid, name, qualified_name)
+        VALUES ('delete', old.rowid, old.name, old.qualified_name);
+        INSERT INTO symbols_fts(rowid, name, qualified_name)
+        VALUES (new.rowid, new.name, new.qualified_name);
+      END
+    `);
+
+    log("info", "schema", "Applied v2→v3 migration: project_hash on documents, symbols table");
+  } catch (err) {
+    log("error", "schema", `v2→v3 migration failed: ${String(err)}`);
+  }
+}
+
 /**
  * Open the brain database, load the vec0 extension, create the schema,
  * run pending migrations, and perform integrity checks.
@@ -188,6 +262,7 @@ export function createSchema(db: Database): void {
       path          TEXT,
       language      TEXT,
       filetype      TEXT,
+      project_hash  TEXT NOT NULL DEFAULT 'global',
       created_at    TEXT NOT NULL DEFAULT (datetime('now')),
       UNIQUE(path, content_hash)
     )
@@ -245,6 +320,19 @@ export function createSchema(db: Database): void {
       title         TEXT NOT NULL,
       content       TEXT NOT NULL,
       created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS symbols (
+      id              TEXT PRIMARY KEY,
+      name            TEXT NOT NULL,
+      qualified_name  TEXT,
+      kind            TEXT,
+      project_hash    TEXT NOT NULL DEFAULT 'global',
+      file_path       TEXT,
+      document_id     TEXT,
+      created_at      TEXT NOT NULL DEFAULT (datetime('now'))
     )
   `);
 
@@ -341,6 +429,15 @@ export function createSchema(db: Database): void {
     )
   `);
 
+  db.exec(`
+    CREATE VIRTUAL TABLE IF NOT EXISTS symbols_fts USING fts5(
+      name,
+      qualified_name,
+      content='symbols',
+      content_rowid='rowid'
+    )
+  `);
+
   // ---- vec0 virtual table (skip gracefully if extension not loaded) -------
 
   try {
@@ -428,6 +525,30 @@ export function createSchema(db: Database): void {
     END
   `);
 
+  // symbols → symbols_fts
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS symbols_ai AFTER INSERT ON symbols BEGIN
+      INSERT INTO symbols_fts(rowid, name, qualified_name)
+      VALUES (new.rowid, new.name, new.qualified_name);
+    END
+  `);
+
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS symbols_ad AFTER DELETE ON symbols BEGIN
+      INSERT INTO symbols_fts(symbols_fts, rowid, name, qualified_name)
+      VALUES ('delete', old.rowid, old.name, old.qualified_name);
+    END
+  `);
+
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS symbols_au AFTER UPDATE ON symbols BEGIN
+      INSERT INTO symbols_fts(symbols_fts, rowid, name, qualified_name)
+      VALUES ('delete', old.rowid, old.name, old.qualified_name);
+      INSERT INTO symbols_fts(rowid, name, qualified_name)
+      VALUES (new.rowid, new.name, new.qualified_name);
+    END
+  `);
+
   // ---- content-hash dedup triggers (BEFORE INSERT, silent skip) -----------
 
   db.exec(`
@@ -497,6 +618,11 @@ export function runMigrations(db: Database): void {
   // v1 → v2: entity_type CHECK
   if (currentVersion < 2) {
     migrateEntityTypeCheck(db);
+  }
+
+  // v2 → v3: add project_hash to documents, create symbols table
+  if (currentVersion < 3) {
+    migrateV2toV3(db);
   }
 
   db.run("INSERT OR REPLACE INTO metadata (key, value) VALUES ('schema_version', ?)", [

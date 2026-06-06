@@ -18,7 +18,7 @@ import { stat } from "fs/promises";
 import { resolve } from "path";
 import type { Database } from "bun:sqlite";
 
-import { generateId, hashBuffer } from "../schema";
+import { generateId, hashBuffer, hashContent } from "../schema";
 import { log } from "../logger";
 import { resolveFiles, detectLanguage } from "./loader";
 import { chunkContent, type Chunk } from "./chunker";
@@ -44,6 +44,8 @@ export interface IngestResult {
 export interface IngestOptions {
   recursive?: boolean;
   reIndex?: boolean;
+  /** Project path for project_hash tagging on documents and symbols. */
+  project?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -106,6 +108,7 @@ export async function ingestPath(
 
   const recursive = options?.recursive !== false;
   const reIndex = options?.reIndex === true;
+  const projectHash = options?.project ? hashContent(options.project) : "global";
 
   // ── 1. Resolve path ─────────────────────────────────────────────────
   let absolutePath: string;
@@ -229,9 +232,9 @@ export async function ingestPath(
 
       try {
         db.run(
-          `INSERT OR IGNORE INTO documents (id, title, content, content_hash, type, path, language, filetype)
-           VALUES (?, ?, ?, ?, 'file', ?, ?, ?)`,
-          [docId, fileName, content, contentHash, filePath, language, filetype],
+          `INSERT OR IGNORE INTO documents (id, title, content, content_hash, type, path, language, filetype, project_hash)
+           VALUES (?, ?, ?, ?, 'file', ?, ?, ?, ?)`,
+          [docId, fileName, content, contentHash, filePath, language, filetype, projectHash],
         );
 
         // Check if document was actually inserted (not dedup'd)
@@ -307,6 +310,30 @@ export async function ingestPath(
       if (newChunkIds.length > 0 && loadVec0(db)) {
         const embedded = await embedChunks(db, newChunkIds);
         result.chunksEmbedded += embedded;
+      }
+
+      // ── 11. Populate symbols table (global symbol store) ─────────────
+      for (const chunk of chunks) {
+        if (chunk.symbol) {
+          try {
+            const symId = generateId();
+            db.run(
+              `INSERT OR IGNORE INTO symbols (id, name, qualified_name, kind, project_hash, file_path, document_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?)`,
+              [
+                symId,
+                chunk.symbol.split(".").pop() ?? chunk.symbol,
+                chunk.symbol,
+                chunk.kind ?? null,
+                projectHash,
+                filePath,
+                docId,
+              ],
+            );
+          } catch {
+            // Silently skip symbol insertion failures
+          }
+        }
       }
 
       result.filesIndexed++;

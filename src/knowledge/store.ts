@@ -314,6 +314,80 @@ export function kbRecord(db: Database, input: KbRecordInput): KbOccurrence {
       "SELECT * FROM knowledge_occurrences WHERE id = ?",
     )
     .get(id);
+
+  // ── E8.1: Confidence Auto-Bump ──────────────────────────────────────────
+  if (input.outcome === "fixed") {
+    const current = db
+      .query<KbEntryRow, unknown[]>(
+        "SELECT * FROM knowledge_entries WHERE entry_key = ? AND kind = ? LIMIT 1",
+      )
+      .get(input.entry_key, input.kind);
+
+    if (current) {
+      // Count fixed outcomes
+      const fixedCount = db
+        .query<{ c: number }, unknown[]>(
+          "SELECT COUNT(*) AS c FROM knowledge_occurrences WHERE entry_key = ? AND kind = ? AND outcome = 'fixed'",
+        )
+        .get(input.entry_key, input.kind)!;
+
+      // Auto-bump confidence by 0.1 (capped at 0.9)
+      const newConfidence = Math.min(0.9, current.confidence + 0.1);
+
+      // Auto-accept if 5+ fixed outcomes
+      let newReviewState = current.review_state;
+      if (fixedCount.c >= 5) {
+        newReviewState = "accepted";
+      }
+
+      // Only update if something changed
+      if (newConfidence !== current.confidence || newReviewState !== current.review_state) {
+        // Record revision for confidence change
+        if (newConfidence !== current.confidence) {
+          db.run(
+            `INSERT INTO knowledge_revisions (id, entry_key, kind, field_name, old_value, new_value, confidence_at_time, review_state_at_time)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              generateId(),
+              input.entry_key,
+              input.kind,
+              "confidence",
+              String(current.confidence),
+              String(newConfidence),
+              newConfidence,
+              newReviewState,
+            ],
+          );
+        }
+
+        // Record revision for review_state change
+        if (newReviewState !== current.review_state) {
+          db.run(
+            `INSERT INTO knowledge_revisions (id, entry_key, kind, field_name, old_value, new_value, confidence_at_time, review_state_at_time)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              generateId(),
+              input.entry_key,
+              input.kind,
+              "review_state",
+              current.review_state,
+              newReviewState,
+              newConfidence,
+              newReviewState,
+            ],
+          );
+        }
+
+        db.run(
+          `UPDATE knowledge_entries
+           SET confidence = ?, review_state = ?, updated_at = datetime('now')
+           WHERE entry_key = ? AND kind = ?`,
+          [newConfidence, newReviewState, input.entry_key, input.kind],
+        );
+      }
+    }
+  }
+
   return row!;
 }
 

@@ -5,6 +5,7 @@
 
 import { Database } from "bun:sqlite";
 import { sessionCache } from "../cache";
+import { hashContent } from "../schema";
 import { loadVec0 } from "../embed/extensionLoader";
 import { generateEmbedding, float32ToBlob } from "../ingest/embed";
 import { EmbeddingService } from "../embed/embeddingService";
@@ -25,7 +26,9 @@ export interface SearchOptions {
   /** Max results (default 20) */
   limit?: number;
   /** Content-type filter */
-  contentType?: "document" | "memory" | "knowledge" | "chunk" | "all";
+  contentType?: "document" | "memory" | "knowledge" | "chunk" | "symbol" | "all";
+  /** Project name or hash to scope search */
+  project?: string;
 }
 
 export interface SearchResult {
@@ -35,8 +38,9 @@ export interface SearchResult {
   excerpt: string;
   /** RRF score (0-1) or 0 when vec0 not available */
   score: number;
-  content_type: "document" | "memory" | "knowledge" | "chunk";
+  content_type: "document" | "memory" | "knowledge" | "chunk" | "symbol";
   source_path?: string;
+  project_hash?: string;
   metadata?: Record<string, unknown>;
 }
 
@@ -120,7 +124,8 @@ function ftsSearchDocuments(
     SELECT d.id, d.title,
            snippet(documents_fts, 1, '<mark>', '</mark>', '...', 40) AS excerpt,
            'document' AS content_type,
-           d.path AS source_path
+           d.path AS source_path,
+           d.project_hash
     FROM documents_fts f
     JOIN documents d ON d.rowid = f.rowid
     WHERE documents_fts MATCH ?
@@ -138,6 +143,10 @@ function ftsSearchDocuments(
   if (filters.type) {
     sql += " AND d.type = ?";
     params.push(filters.type);
+  }
+  if (filters.project) {
+    sql += " AND d.project_hash = ?";
+    params.push(hashContent(filters.project));
   }
 
   sql += " ORDER BY rank LIMIT ?";
@@ -158,6 +167,7 @@ function ftsSearchDocuments(
       score: 0,
       content_type: "document" as const,
       source_path: r.source_path ?? undefined,
+      project_hash: (r as any).project_hash ?? undefined,
     }));
   } catch {
     return [];
@@ -177,14 +187,21 @@ function ftsSearchMemories(
   let sql = `
     SELECT m.id, m.title,
            snippet(memories_fts, 1, '<mark>', '</mark>', '...', 40) AS excerpt,
-           'memory' AS content_type
+           'memory' AS content_type,
+           1.0 / (julianday('now') - julianday(m.date) + 1.0) *
+           CASE WHEN m.type = 'decision' THEN 2.0 ELSE 1.0 END AS sort_score
     FROM memories_fts f
     JOIN memories m ON m.rowid = f.rowid
     WHERE memories_fts MATCH ?
   `;
   const params: unknown[] = [query];
 
-  sql += " ORDER BY rank LIMIT ?";
+  if (filters.project) {
+    sql += " AND m.project_hash = ?";
+    params.push(hashContent(filters.project));
+  }
+
+  sql += " ORDER BY sort_score DESC, rank LIMIT ?";
   params.push(maxResults);
 
   try {
@@ -231,6 +248,9 @@ function ftsSearchKnowledge(
   if (filters.entity_type) {
     sql += " AND k.entity_type = ?";
     params.push(filters.entity_type);
+  }
+  if (filters.project) {
+    // Knowledge entries don't have project_hash, skip filter
   }
 
   sql += " ORDER BY rank LIMIT ?";
@@ -354,6 +374,14 @@ function searchChunksFallback(
       sql += " AND c.kind = ?";
       params.push(filters.kind);
     }
+    if (filters.symbol) {
+      sql += " AND c.symbol LIKE ?";
+      params.push(`%${filters.symbol}%`);
+    }
+    if (filters.project) {
+      sql += " AND d.project_hash = ?";
+      params.push(hashContent(filters.project));
+    }
 
     sql += " ORDER BY c.chunk_index LIMIT ?";
     params.push(maxResults);
@@ -436,6 +464,66 @@ function rrfFusion(lists: WeightedList[], k: number = 60): SearchResult[] {
   return Array.from(map.values())
     .sort((a, b) => b.rrfScore - a.rrfScore)
     .map(({ rrfScore, ...rest }) => ({ ...rest, score: rrfScore }));
+}
+
+// ---------------------------------------------------------------------------
+// FTS5 search: symbols (global symbol store)
+// ---------------------------------------------------------------------------
+
+function ftsSearchSymbols(
+  db: Database,
+  query: string,
+  filters: ParsedFilters,
+  maxResults: number,
+): SearchResult[] {
+  let sql = `
+    SELECT s.id, s.name AS title,
+           coalesce(s.qualified_name, s.name) AS excerpt,
+           'symbol' AS content_type,
+           s.file_path AS source_path,
+           s.project_hash,
+           s.kind
+    FROM symbols_fts f
+    JOIN symbols s ON s.rowid = f.rowid
+    WHERE symbols_fts MATCH ?
+  `;
+  const params: unknown[] = [query];
+
+  if (filters.project) {
+    sql += " AND s.project_hash = ?";
+    params.push(hashContent(filters.project));
+  }
+  if (filters.kind) {
+    sql += " AND s.kind = ?";
+    params.push(filters.kind);
+  }
+
+  sql += " ORDER BY rank LIMIT ?";
+  params.push(maxResults);
+
+  try {
+    const rows = db.query(sql).all(...params) as Array<{
+      id: string;
+      title: string;
+      excerpt: string;
+      content_type: "symbol";
+      source_path: string | null;
+      project_hash: string | null;
+      kind: string | null;
+    }>;
+    return rows.map((r) => ({
+      id: r.id,
+      title: r.title,
+      excerpt: r.excerpt,
+      score: 0,
+      content_type: "symbol" as const,
+      source_path: r.source_path ?? undefined,
+      project_hash: r.project_hash ?? undefined,
+      metadata: { kind: r.kind ?? undefined },
+    }));
+  } catch {
+    return [];
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -529,6 +617,12 @@ export async function brainSearch(
   if (ct === "all" || ct === "knowledge") {
     ftsLists.push({
       items: ftsSearchKnowledge(db, sanitized, mergedFilters, limit),
+      weight: ftsWeight,
+    });
+  }
+  if (ct === "all" || ct === "symbol") {
+    ftsLists.push({
+      items: ftsSearchSymbols(db, sanitized, mergedFilters, limit),
       weight: ftsWeight,
     });
   }

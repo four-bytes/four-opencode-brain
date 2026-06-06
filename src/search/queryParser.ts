@@ -19,6 +19,7 @@ export interface ParsedFilters {
   symbol?: string;
   entity_type?: string;
   type?: string;
+  project?: string;
 }
 
 export interface ParsedQuery {
@@ -39,6 +40,7 @@ const KNOWN_FILTER_KEYS = new Set([
   "symbol",
   "entity_type",
   "type",
+  "project",
 ]);
 
 // ---------------------------------------------------------------------------

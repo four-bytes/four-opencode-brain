@@ -36,6 +36,7 @@ export interface SearchOpts {
   type?: string;
   tags?: string;
   project?: string;
+  crossProject?: boolean;
   limit?: number;
 }
 
@@ -122,7 +123,11 @@ export function memorySearch(db: Database, opts: SearchOpts): MemoryEntry[] {
   if (!opts.query) return [];
 
   let sql = `
-    SELECT m.id, m.project_hash, m.date, m.type, m.tags, m.title, m.content, m.created_at
+    SELECT m.id, m.project_hash, m.date, m.type, m.tags, m.title, m.content, m.created_at,
+           1.0 / (julianday('now') - julianday(m.date) + 1.0) AS recency,
+           CASE WHEN m.type = 'decision' THEN 2.0 ELSE 1.0 END AS type_boost,
+           (1.0 / (julianday('now') - julianday(m.date) + 1.0)) *
+           CASE WHEN m.type = 'decision' THEN 2.0 ELSE 1.0 END AS sort_score
     FROM memories_fts f
     JOIN memories m ON m.rowid = f.rowid
     WHERE memories_fts MATCH ?
@@ -137,12 +142,13 @@ export function memorySearch(db: Database, opts: SearchOpts): MemoryEntry[] {
     sql += " AND m.tags LIKE ?";
     params.push(`%${opts.tags}%`);
   }
-  if (opts.project) {
+  if (opts.project && !opts.crossProject) {
     sql += " AND m.project_hash = ?";
     params.push(hashContent(opts.project));
   }
 
-  sql += " ORDER BY rank LIMIT ?";
+  // E8.4: order by recency decay * type boost, then FTS5 rank
+  sql += " ORDER BY sort_score DESC, rank LIMIT ?";
   params.push(opts.limit ?? 20);
 
   try {
