@@ -146,8 +146,13 @@ export async function onSessionIdle(
 ): Promise<void> {
   if (!text) return;
 
+  log("debug", "autocapture", "Scanning session text for decisions", { textLength: text.length });
+
   const decisions = scanForDecisions(text);
-  if (decisions.length === 0) return;
+  if (decisions.length === 0) {
+    log("debug", "autocapture", "No decision patterns found in session text", { textLength: text.length });
+    return;
+  }
 
   const conn = db ?? openDatabase();
   try {
@@ -187,6 +192,8 @@ export async function onSessionIdle(
         phrase: decision.phrase,
       });
     }
+
+    log("debug", "autocapture", "Auto-capture complete", { decisionsFound: decisions.length });
   } finally {
     if (!db) conn.close();
   }
