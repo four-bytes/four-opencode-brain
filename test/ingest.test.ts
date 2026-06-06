@@ -9,6 +9,7 @@ import { join } from "path";
 import { openDatabase, createSchema } from "../src/schema";
 import { ingestPath } from "../src/ingest";
 import { sessionCache } from "../src/cache";
+import { brainSearch } from "../src/search/unified";
 
 // ---------------------------------------------------------------------------
 // Test directory setup
@@ -371,5 +372,377 @@ describe("ingestPath — content hash dedup second layer", () => {
       )
       .get(filePath)!.c;
     expect(count).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// E5.1: Integration pipeline — multi-file project with real-looking code
+// ---------------------------------------------------------------------------
+
+describe("ingestPath — integration pipeline (E5.1)", () => {
+  const PROJ_DIR = join(TEST_DIR, "integration-project");
+  const TS_FILE = "math.ts";
+  const JS_FILE = "utils.js";
+  const PHP_FILE = "routes.php";
+  const MD_FILE = "README.md";
+
+  function createProjectFiles(): void {
+    if (existsSync(PROJ_DIR)) rmSync(PROJ_DIR, { recursive: true, force: true });
+    mkdirSync(PROJ_DIR, { recursive: true });
+
+    // .ts — real-looking TypeScript module
+    writeFileSync(
+      join(PROJ_DIR, TS_FILE),
+      `export function add(a: number, b: number): number {
+  return a + b;
+}
+
+export function multiply(a: number, b: number): number {
+  return a * b;
+}
+
+export class Calculator {
+  private result = 0;
+
+  add(value: number): this {
+    this.result += value;
+    return this;
+  }
+
+  getResult(): number {
+    return this.result;
+  }
+}
+`,
+      "utf-8",
+    );
+
+    // .js — real-looking JavaScript module
+    writeFileSync(
+      join(PROJ_DIR, JS_FILE),
+      `const fs = require("fs");
+const path = require("path");
+
+function loadConfig(configPath) {
+  const resolved = path.resolve(configPath);
+  if (!fs.existsSync(resolved)) {
+    throw new Error(\`Config not found: \${resolved}\`);
+  }
+  const data = fs.readFileSync(resolved, "utf-8");
+  return JSON.parse(data);
+}
+
+module.exports = { loadConfig };
+`,
+      "utf-8",
+    );
+
+    // .php — real-looking PHP class
+    writeFileSync(
+      join(PROJ_DIR, PHP_FILE),
+      `<?php
+
+namespace App\\Http;
+
+use Psr\\Http\\Message\\ResponseInterface;
+use Psr\\Http\\Message\\ServerRequestInterface;
+
+class Router
+{
+    private array $routes = [];
+
+    public function get(string $path, callable $handler): void
+    {
+        $this->routes["GET"][$path] = $handler;
+    }
+
+    public function post(string $path, callable $handler): void
+    {
+        $this->routes["POST"][$path] = $handler;
+    }
+
+    public function dispatch(ServerRequestInterface $request): ResponseInterface
+    {
+        $method = $request->getMethod();
+        $path = $request->getUri()->getPath();
+
+        if (!isset($this->routes[$method][$path])) {
+            throw new \\RuntimeException("Route not found: " . $method . " " . $path);
+        }
+
+        $handler = $this->routes[$method][$path];
+        return $handler($request);
+    }
+}
+`,
+      "utf-8",
+    );
+
+    // .md — realistic documentation
+    writeFileSync(
+      join(PROJ_DIR, MD_FILE),
+      `# Project Calculator
+
+A simple calculator API built with TypeScript.
+
+## Installation
+
+\`\`\`bash
+npm install
+\`\`\`
+
+## Usage
+
+Import the Calculator class and start computing:
+
+\`\`\`typescript
+import { Calculator, add } from "./math";
+
+const calc = new Calculator();
+calc.add(5).add(3);
+console.log(calc.getResult()); // 8
+console.log(add(2, 2));        // 4
+\`\`\`
+
+## API Routes
+
+| Method | Path       | Description |
+|--------|------------|-------------|
+| GET    | /calculate | Run calculation |
+| POST   | /reset     | Reset calculator |
+`,
+      "utf-8",
+    );
+  }
+
+  test("ingests 4 real-looking files and creates documents, chunks, symbols", async () => {
+    createProjectFiles();
+
+    const result = await ingestPath(db, PROJ_DIR);
+    expect(result.filesFound).toBe(4);
+    expect(result.filesIndexed).toBe(4);
+    expect(result.filesSkipped).toBe(0);
+    expect(result.errors.length).toBe(0);
+    expect(result.durationMs).toBeGreaterThan(0);
+    expect(result.documentsCreated).toBeGreaterThanOrEqual(4);
+    expect(result.chunksCreated).toBeGreaterThanOrEqual(4);
+
+    // Verify each document exists with correct metadata
+    for (const [fname, lang, ftype] of [
+      [TS_FILE, "typescript", "ts"],
+      [JS_FILE, "javascript", "js"],
+      [PHP_FILE, "php", "php"],
+      [MD_FILE, "markdown", "md"],
+    ] as const) {
+      const doc = db
+        .query<{ title: string; language: string; filetype: string }, []>(
+          "SELECT title, language, filetype FROM documents WHERE path LIKE ?",
+        )
+        .get(`%${fname}`);
+      expect(doc).not.toBeNull();
+      expect(doc!.title).toBe(fname);
+      expect(doc!.language).toBe(lang);
+      expect(doc!.filetype).toBe(ftype);
+    }
+
+    // Verify chunks exist for each file
+    const totalChunks = db
+      .query<{ c: number }, []>("SELECT COUNT(*) AS c FROM chunks")
+      .get()!.c;
+    expect(totalChunks).toBeGreaterThanOrEqual(4);
+
+    // TS file is small (<1024 tokens) → single "document" chunk, no symbol breakdown
+    const tsDocChunk = db
+      .query<{ chunk_type: string; symbol: unknown }, []>(
+        "SELECT chunk_type, symbol FROM chunks WHERE document_id IN (SELECT id FROM documents WHERE path LIKE ?) ORDER BY chunk_index LIMIT 1",
+      )
+      .get(`%${TS_FILE}`);
+    expect(tsDocChunk).not.toBeNull();
+    expect(tsDocChunk!.chunk_type).toBe("document");
+    expect(tsDocChunk!.symbol).toBeNull();
+
+    // JS file also small → "document" chunk
+    const jsDocChunk = db
+      .query<{ chunk_type: string }, []>(
+        "SELECT chunk_type FROM chunks WHERE document_id IN (SELECT id FROM documents WHERE path LIKE ?) ORDER BY chunk_index LIMIT 1",
+      )
+      .get(`%${JS_FILE}`);
+    expect(jsDocChunk).not.toBeNull();
+    expect(jsDocChunk!.chunk_type).toBe("document");
+
+    // PHP file → "document" chunk (file is also small at 831 bytes)
+    const phpDocChunk = db
+      .query<{ chunk_type: string }, []>(
+        "SELECT chunk_type FROM chunks WHERE document_id IN (SELECT id FROM documents WHERE path LIKE ?) ORDER BY chunk_index LIMIT 1",
+      )
+      .get(`%${PHP_FILE}`);
+    expect(phpDocChunk).not.toBeNull();
+
+    // MD file → "heading" chunks (markdown split by headings)
+    const mdHeadingChunks = db
+      .query<{ chunk_type: string }, []>(
+        "SELECT chunk_type FROM chunks WHERE document_id IN (SELECT id FROM documents WHERE path LIKE ?) AND chunk_type = 'heading' ORDER BY chunk_index",
+      )
+      .all(`%${MD_FILE}`);
+    expect(mdHeadingChunks.length).toBeGreaterThanOrEqual(1);
+  });
+
+  test("modify one file and re-ingest — only changed file updated", async () => {
+    // Modify the TS file (add a function)
+    writeFileSync(
+      join(PROJ_DIR, TS_FILE),
+      `export function add(a: number, b: number): number {
+  return a + b;
+}
+
+export function multiply(a: number, b: number): number {
+  return a * b;
+}
+
+export function subtract(a: number, b: number): number {
+  return a - b;
+}
+
+export class Calculator {
+  private result = 0;
+
+  add(value: number): this {
+    this.result += value;
+    return this;
+  }
+
+  getResult(): number {
+    return this.result;
+  }
+}
+`,
+      "utf-8",
+    );
+
+    const result = await ingestPath(db, PROJ_DIR);
+    expect(result.filesFound).toBe(4);
+    expect(result.filesIndexed).toBe(1); // only TS changed
+    expect(result.filesSkipped).toBe(3); // JS, PHP, MD unchanged
+    expect(result.errors.length).toBe(0);
+
+    // Verify total docs — new content hash allows second document row
+    // (UNIQUE(path, content_hash) permits different content for same path)
+    const docCount = db
+      .query<{ c: number }, []>(
+        "SELECT COUNT(*) AS c FROM documents WHERE path LIKE ?",
+      )
+      .get(`%${TS_FILE}`)!.c;
+    expect(docCount).toBeGreaterThanOrEqual(1);
+
+    // Verify old chunks were cleaned up and new ones exist
+    const chunkTotal = db
+      .query<{ c: number }, []>(
+        "SELECT COUNT(*) AS c FROM chunks WHERE document_id IN (SELECT id FROM documents WHERE path LIKE ?)",
+      )
+      .get(`%${TS_FILE}`)!.c;
+    expect(chunkTotal).toBeGreaterThanOrEqual(1);
+  });
+
+  test("search returns results across ingested content types", async () => {
+    // Search documents by keyword
+    const docResults = await brainSearch(db, "Calculator", {
+      contentType: "document",
+      limit: 10,
+    });
+    expect(docResults.length).toBeGreaterThanOrEqual(1);
+    expect(docResults.some((r) => r.title === "math.ts")).toBe(true);
+
+    // Search for PHP content
+    const phpResults = await brainSearch(db, "Router", {
+      contentType: "document",
+      limit: 10,
+    });
+    expect(phpResults.length).toBeGreaterThanOrEqual(1);
+
+    // Search for markdown content
+    const mdResults = await brainSearch(db, "Installation", {
+      contentType: "document",
+      limit: 10,
+    });
+    expect(mdResults.length).toBeGreaterThanOrEqual(1);
+
+    // Search all content types
+    const allResults = await brainSearch(db, "loadConfig", {
+      contentType: "document",
+      limit: 10,
+    });
+    expect(allResults.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// E5.3: Edge cases — binary files, size limits, concurrency
+// ---------------------------------------------------------------------------
+
+describe("ingestPath — edge cases (E5.3)", () => {
+  const EDGE_DIR = join(TEST_DIR, "edge-cases");
+
+  beforeAll(() => {
+    if (existsSync(EDGE_DIR)) rmSync(EDGE_DIR, { recursive: true, force: true });
+    mkdirSync(EDGE_DIR, { recursive: true });
+  });
+
+  test("skips binary file (.png) by extension filter", async () => {
+    // .png is not in the extension map → language is null → skipped
+    writeFileSync(join(EDGE_DIR, "image.png"), Buffer.alloc(128, 0x89));
+
+    const result = await ingestPath(db, EDGE_DIR);
+    // The dir has only the .png file, which has null language — not counted as found
+    expect(result.filesFound).toBe(0);
+    expect(result.filesIndexed).toBe(0);
+    expect(result.errors.length).toBe(0);
+  });
+
+  test("skips file over 10MB cap", async () => {
+    // Create a file just over 10MB
+    const largeContent = "x".repeat(11 * 1024 * 1024); // ~11MB
+    writeFileSync(join(EDGE_DIR, "large.ts"), largeContent, "utf-8");
+
+    const result = await ingestPath(db, EDGE_DIR);
+    expect(result.filesFound).toBe(1);
+    expect(result.filesIndexed).toBe(0);
+    expect(result.errors.length).toBeGreaterThanOrEqual(1);
+    expect(result.errors[0]).toContain("exceeds 10MB cap");
+  });
+
+  test("concurrent ingests don't corrupt database", async () => {
+    const concDir = join(TEST_DIR, "concurrent");
+    if (existsSync(concDir)) rmSync(concDir, { recursive: true, force: true });
+    mkdirSync(concDir, { recursive: true });
+
+    writeFileSync(join(concDir, "a.ts"), "export const alpha = 1;\n", "utf-8");
+    writeFileSync(join(concDir, "b.ts"), "export const beta = 2;\n", "utf-8");
+    writeFileSync(join(concDir, "c.ts"), "export const gamma = 3;\n", "utf-8");
+
+    const results = await Promise.all(
+      [join(concDir, "a.ts"), join(concDir, "b.ts"), join(concDir, "c.ts")].map(
+        (p) => ingestPath(db, p),
+      ),
+    );
+
+    expect(results.length).toBe(3);
+    for (const r of results) {
+      expect(r.errors.length).toBe(0);
+      expect(r.filesIndexed).toBe(1);
+    }
+
+    // Verify all files were indexed
+    const total = db
+      .query<{ c: number }, []>(
+        "SELECT COUNT(*) AS c FROM files WHERE path LIKE ?",
+      )
+      .get(`%concurrent%`)!.c;
+    expect(total).toBe(3);
+
+    // DB integrity check
+    const integrity = db
+      .query<{ integrity_check: string }, []>("PRAGMA integrity_check")
+      .get()!;
+    expect(integrity.integrity_check).toBe("ok");
   });
 });

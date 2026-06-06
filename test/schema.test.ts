@@ -3,7 +3,7 @@ import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, rmSync } from "fs";
 import { join } from "path";
 
-import { openDatabase, createSchema, generateId, hashContent } from "../src/schema";
+import { openDatabase, createSchema, generateId, hashContent, initBrainDatabase, SCHEMA_VERSION, runMigrations, runIntegrityChecks, dbStats } from "../src/schema";
 
 // ---------------------------------------------------------------------------
 // Test suite — unified brain.db schema
@@ -417,5 +417,125 @@ describe("metadata table", () => {
       .get("schema_version");
     expect(row).not.toBeNull();
     expect(row!.value).toBe("1");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// E6.1: Schema version + migration
+// ---------------------------------------------------------------------------
+
+describe("schema version and migration (E6.1)", () => {
+  test("SCHEMA_VERSION is 2", () => {
+    expect(SCHEMA_VERSION).toBe(2);
+  });
+
+  test("runMigrations sets schema_version in metadata", () => {
+    // Reset metadata to simulate upgrade from version 0
+    db.run("DELETE FROM metadata WHERE key = 'schema_version'");
+    runMigrations(db);
+
+    const row = db
+      .query<{ value: string }, []>(
+        "SELECT value FROM metadata WHERE key = 'schema_version'",
+      )
+      .get();
+    expect(row).not.toBeNull();
+    expect(parseInt(row!.value, 10)).toBe(SCHEMA_VERSION);
+  });
+
+  test("runMigrations is idempotent", () => {
+    runMigrations(db);
+    runMigrations(db);
+
+    const row = db
+      .query<{ value: string }, []>(
+        "SELECT value FROM metadata WHERE key = 'schema_version'",
+      )
+      .get();
+    expect(row).not.toBeNull();
+    expect(parseInt(row!.value, 10)).toBe(SCHEMA_VERSION);
+  });
+
+  test("initBrainDatabase calls runMigrations automatically", () => {
+    const migrateDbPath = join(TEST_DIR, "init-migration-test.db");
+    const result = initBrainDatabase(migrateDbPath);
+    try {
+      const row = result
+        .query<{ value: string }, []>(
+          "SELECT value FROM metadata WHERE key = 'schema_version'",
+        )
+        .get();
+      expect(row).not.toBeNull();
+      expect(parseInt(row!.value, 10)).toBe(SCHEMA_VERSION);
+    } finally {
+      result.close();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// E6.2: Integrity checks
+// ---------------------------------------------------------------------------
+
+describe("integrity checks (E6.2)", () => {
+  test("runIntegrityChecks does not throw on clean database", () => {
+    expect(() => runIntegrityChecks(db)).not.toThrow();
+  });
+
+  test("PRAGMA integrity_check returns ok", () => {
+    const row = db
+      .query<{ integrity_check: string }, []>("PRAGMA integrity_check")
+      .get()!;
+    expect(row.integrity_check).toBe("ok");
+  });
+
+  test("PRAGMA foreign_key_check returns no violations", () => {
+    const violations = db.query("PRAGMA foreign_key_check").all();
+    expect(violations.length).toBe(0);
+  });
+
+  test("no orphan chunks in clean database", () => {
+    const orphans = db
+      .query<{ c: number }, []>(
+        "SELECT COUNT(*) AS c FROM chunks WHERE document_id NOT IN (SELECT id FROM documents)",
+      )
+      .get()!;
+    expect(orphans.c).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// E6.3: DB stats
+// ---------------------------------------------------------------------------
+
+describe("dbStats (E6.3)", () => {
+  test("returns correct structure and types", () => {
+    const stats = dbStats(db);
+    expect(typeof stats.totalFiles).toBe("number");
+    expect(typeof stats.totalDocuments).toBe("number");
+    expect(typeof stats.totalChunks).toBe("number");
+    expect(typeof stats.totalMemories).toBe("number");
+    expect(typeof stats.totalKnowledgeEntries).toBe("number");
+    expect(typeof stats.totalDiaryEntries).toBe("number");
+    expect(typeof stats.dbSizeBytes).toBe("number");
+  });
+
+  test("all counts are non-negative", () => {
+    const stats = dbStats(db);
+    expect(stats.totalFiles).toBeGreaterThanOrEqual(0);
+    expect(stats.totalDocuments).toBeGreaterThanOrEqual(0);
+    expect(stats.totalChunks).toBeGreaterThanOrEqual(0);
+    expect(stats.totalMemories).toBeGreaterThanOrEqual(0);
+    expect(stats.totalKnowledgeEntries).toBeGreaterThanOrEqual(0);
+    expect(stats.totalDiaryEntries).toBeGreaterThanOrEqual(0);
+    expect(stats.dbSizeBytes).toBeGreaterThanOrEqual(0);
+  });
+
+  test("returns matching counts for known data", () => {
+    // Count files directly
+    const fileCount = db
+      .query<{ c: number }, []>("SELECT COUNT(*) AS c FROM files")
+      .get()!;
+    expect(dbStats(db).totalFiles).toBe(fileCount.c);
   });
 });

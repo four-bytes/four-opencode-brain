@@ -1,9 +1,126 @@
 import { Database } from "bun:sqlite";
-import { mkdirSync } from "fs";
+import { mkdirSync, statSync } from "fs";
 import { homedir } from "os";
 import { join, dirname } from "path";
 import { log } from "./logger";
 import { loadVec0 } from "./embed/extensionLoader";
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+/** Current schema version for migration tracking. */
+export const SCHEMA_VERSION = 2;
+
+// ---------------------------------------------------------------------------
+// Integrity checks — PRAGMA + orphan chunk auditing
+// ---------------------------------------------------------------------------
+
+/**
+ * Run database integrity checks on startup.
+ * - PRAGMA integrity_check (quick sanity)
+ * - PRAGMA foreign_key_check (FK violation detection)
+ * - Orphan chunk audit (chunks without matching documents)
+ * All checks log warnings on failure but never throw.
+ */
+export function runIntegrityChecks(db: Database): void {
+  try {
+    const row = db
+      .query<{ integrity_check: string }, []>("PRAGMA integrity_check")
+      .get();
+    if (row && row.integrity_check !== "ok") {
+      log("warn", "integrity", `DB integrity check failed: ${row.integrity_check}`);
+    }
+  } catch (err) {
+    log("error", "integrity", `Integrity check error: ${String(err)}`);
+  }
+
+  try {
+    const violations = db
+      .query("PRAGMA foreign_key_check")
+      .all() as Array<Record<string, unknown>>;
+    if (violations.length > 0) {
+      log("warn", "integrity", `Foreign key violations: ${violations.length}`);
+      for (const v of violations) {
+        log("debug", "integrity", `FK violation: ${JSON.stringify(v)}`);
+      }
+    }
+  } catch (err) {
+    log("error", "integrity", `Foreign key check error: ${String(err)}`);
+  }
+
+  try {
+    const orphans = db
+      .query<{ c: number }, []>(
+        "SELECT COUNT(*) AS c FROM chunks WHERE document_id NOT IN (SELECT id FROM documents)",
+      )
+      .get()!;
+    if (orphans.c > 0) {
+      log("warn", "integrity", `Found ${orphans.c} orphan chunks (no matching document)`);
+    }
+  } catch (err) {
+    log("error", "integrity", `Orphan chunk check error: ${String(err)}`);
+  }
+}
+
+export interface DbStats {
+  totalFiles: number;
+  totalDocuments: number;
+  totalChunks: number;
+  totalMemories: number;
+  totalKnowledgeEntries: number;
+  totalDiaryEntries: number;
+  dbSizeBytes: number;
+}
+
+/**
+ * Return database statistics: row counts for all major tables and DB file size.
+ * Useful for health monitoring and status reporting.
+ */
+export function dbStats(db: Database, dbPath?: string): DbStats {
+  const fileCount = db
+    .query<{ c: number }, []>("SELECT COUNT(*) AS c FROM files")
+    .get()!;
+  const docCount = db
+    .query<{ c: number }, []>("SELECT COUNT(*) AS c FROM documents")
+    .get()!;
+  const chunkCount = db
+    .query<{ c: number }, []>("SELECT COUNT(*) AS c FROM chunks")
+    .get()!;
+  const memCount = db
+    .query<{ c: number }, []>("SELECT COUNT(*) AS c FROM memories")
+    .get()!;
+  const kbCount = db
+    .query<{ c: number }, []>("SELECT COUNT(*) AS c FROM knowledge_entries")
+    .get()!;
+  const diaryCount = db
+    .query<{ c: number }, []>("SELECT COUNT(*) AS c FROM diary_entries")
+    .get()!;
+
+  let dbSizeBytes = 0;
+  try {
+    const pageCount = db
+      .query<{ page_count: number }, []>("PRAGMA page_count")
+      .get()!;
+    const pageRow = db
+      .query<{ page_size: number }, []>("PRAGMA page_size")
+      .get()!;
+    dbSizeBytes = Number(pageCount.page_count) * Number(pageRow.page_size);
+    if (isNaN(dbSizeBytes)) dbSizeBytes = 0;
+  } catch {
+    // In-memory databases have no file size
+  }
+
+  return {
+    totalFiles: fileCount.c,
+    totalDocuments: docCount.c,
+    totalChunks: chunkCount.c,
+    totalMemories: memCount.c,
+    totalKnowledgeEntries: kbCount.c,
+    totalDiaryEntries: diaryCount.c,
+    dbSizeBytes,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // UUID7-style ID: 12 hex chars of timestamp + 20 hex chars random
@@ -42,13 +159,16 @@ export function openDatabase(dbPath?: string): Database {
 }
 
 /**
- * Open the brain database, load the vec0 extension, and create the schema.
+ * Open the brain database, load the vec0 extension, create the schema,
+ * run pending migrations, and perform integrity checks.
  * This is the single entry point — ensures vec0 is loaded before schema creation.
  */
 export function initBrainDatabase(dbPath?: string): Database {
   const db = openDatabase(dbPath);
   loadVec0(db);
   createSchema(db);
+  runMigrations(db);
+  runIntegrityChecks(db);
   return db;
 }
 
@@ -337,6 +457,52 @@ export function createSchema(db: Database): void {
       );
     END
   `);
+}
+
+// ---------------------------------------------------------------------------
+// Migration runner — version-aware schema migrations
+// ---------------------------------------------------------------------------
+
+/**
+ * Run all pending schema migrations based on the stored schema_version.
+ * Fresh databases (version 0, no entry) skip all migrations since
+ * createSchema() already creates the latest schema.
+ *
+ * Migration history:
+ *   v1 → v2: entity_type CHECK constraint via triggers
+ */
+export function runMigrations(db: Database): void {
+  let currentVersion = 0;
+  try {
+    const row = db
+      .query<{ value: string }, []>("SELECT value FROM metadata WHERE key = 'schema_version'")
+      .get();
+    if (row) {
+      currentVersion = parseInt(row.value, 10) || 0;
+    }
+  } catch {
+    // metadata table may not exist yet on truly first run — skip
+  }
+
+  if (currentVersion >= SCHEMA_VERSION) {
+    // Already current — ensure metadata entry exists
+    db.run("INSERT OR REPLACE INTO metadata (key, value) VALUES ('schema_version', ?)", [
+      String(SCHEMA_VERSION),
+    ]);
+    return;
+  }
+
+  log("info", "schema", `Schema migration: ${currentVersion} → ${SCHEMA_VERSION}`);
+
+  // v1 → v2: entity_type CHECK
+  if (currentVersion < 2) {
+    migrateEntityTypeCheck(db);
+  }
+
+  db.run("INSERT OR REPLACE INTO metadata (key, value) VALUES ('schema_version', ?)", [
+    String(SCHEMA_VERSION),
+  ]);
+  log("info", "schema", `Schema at version ${SCHEMA_VERSION}`);
 }
 
 // ---------------------------------------------------------------------------
