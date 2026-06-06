@@ -87,6 +87,12 @@ export function generateEmbedding(text: string): Float32Array {
 export async function embedChunks(db: Database, chunkIds: string[]): Promise<number> {
   if (chunkIds.length === 0) return 0;
 
+  // Guard: vec0 module must be loaded on this handle
+  if (!loadVec0(db)) {
+    log("warn", "embed", "vec0 extension not loaded on this handle — skipping embedding");
+    return 0;
+  }
+
   // Verify the chunks_vec table exists before proceeding
   const tableExists = db
     .query<{ c: number }, []>(

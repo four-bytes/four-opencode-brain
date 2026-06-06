@@ -324,10 +324,14 @@ export async function ingestPath(
         }
       }
 
-      // ── 10. Embed chunks (vec0) ─────────────────────────────────────
+      // ── 10. Embed chunks (vec0) — non-fatal if unavailable ─────────
       if (newChunkIds.length > 0 && loadVec0(db)) {
-        const embedded = await embedChunks(db, newChunkIds);
-        result.chunksEmbedded += embedded;
+        try {
+          const embedded = await embedChunks(db, newChunkIds);
+          result.chunksEmbedded += embedded;
+        } catch (err) {
+          result.errors.push(`Embedding failed (non-fatal): ${String(err)}`);
+        }
       }
 
       // ── 11. Populate symbols table (global symbol store) ─────────────
