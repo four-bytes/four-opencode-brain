@@ -16,6 +16,7 @@ import {
   memoryForget,
   memoryGet,
   diaryGet,
+  diaryAdd,
 } from "./memory/store";
 import { brainSystemPrompt } from "./hooks/system-prompt";
 import { onChatMessage, onSessionIdle } from "./hooks/auto-capture";
@@ -247,6 +248,10 @@ export default (async (input: PluginInput) => {
       offset: s.number().optional(),
       date: s.string().optional(),
       id: s.string().optional(),
+      subMode: s.string().optional().describe("For diary mode: add | get"),
+      diaryTitle: s.string().optional().describe("Diary entry title (for add)"),
+      diaryContent: s.string().optional().describe("Diary entry content (for add)"),
+      diaryDate: s.string().optional().describe("Diary date YYYY-MM-DD (defaults today)"),
     },
     execute: async (args) => {
       const db = initBrainDatabase();
@@ -284,6 +289,17 @@ export default (async (input: PluginInput) => {
           case "forget":
             return JSON.stringify({ ok: memoryForget(db, args.id as string) });
           case "diary":
+            if (args.subMode === "add") {
+              if (!args.diaryTitle || !args.diaryContent) {
+                return JSON.stringify({ error: "diaryTitle and diaryContent required for subMode=add" });
+              }
+              diaryAdd(db, {
+                title: args.diaryTitle as string,
+                content: args.diaryContent as string,
+                date: args.diaryDate as string | undefined,
+              });
+              return JSON.stringify(diaryGet(db, (args.diaryDate as string) ?? new Date().toISOString().split("T")[0]));
+            }
             return JSON.stringify(
               diaryGet(db, (args.date as string) ?? new Date().toISOString().split("T")[0]),
             );
