@@ -34,7 +34,7 @@ function tableExists(name: string): boolean {
 
 describe("brain_reindex — tool definition", () => {
   test("plugin exports brain_reindex tool", async () => {
-    const result = await plugin({
+    const result = await plugin.server({
       client: {} as any,
       project: "test",
       directory: "/tmp",

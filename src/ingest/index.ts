@@ -154,7 +154,7 @@ export async function ingestPath(
   }
 
   // ── 3. SAVEPOINT: wrap the entire ingest ────────────────────────────
-  const sp = "brain_ingest_" + Date.now();
+  const sp = "brain_ingest_" + generateId();
   db.exec(`SAVEPOINT ${sp}`);
 
   try {

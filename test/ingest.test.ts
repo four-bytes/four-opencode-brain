@@ -719,9 +719,19 @@ describe("ingestPath — edge cases (E5.3)", () => {
     writeFileSync(join(concDir, "b.ts"), "export const beta = 2;\n", "utf-8");
     writeFileSync(join(concDir, "c.ts"), "export const gamma = 3;\n", "utf-8");
 
+    // Each concurrent ingest gets its own DB connection (matching production behavior)
+    const dbs: Database[] = [];
     const results = await Promise.all(
       [join(concDir, "a.ts"), join(concDir, "b.ts"), join(concDir, "c.ts")].map(
-        (p) => ingestPath(db, p),
+        async (p) => {
+          const conn = openDatabase(TEST_DB_PATH);
+          dbs.push(conn);
+          try {
+            return await ingestPath(conn, p);
+          } finally {
+            conn.close();
+          }
+        },
       ),
     );
 
