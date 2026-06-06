@@ -92,7 +92,7 @@ function clearStatus(): void {
   }
 }
 
-export default (async (input: PluginInput) => {
+const _serverPlugin = async (input: PluginInput) => {
   const { client, project, directory, $ } = input;
 
   sessionCache.reset();
@@ -731,4 +731,43 @@ export default (async (input: PluginInput) => {
       brain_kb_stats,
     },
   };
-}) satisfies Plugin;
+};
+
+// ==================================================================
+// TUI companion (rendered into OpenCode app_bottom slot)
+// ==================================================================
+
+const _tuiBrain = (() => {
+  let _text = "• 🧠 " + VERSION;
+  let _timer = null;
+
+  return {
+    tui: async (api) => {
+      try {
+        const d = join(homedir(), ".cache", "opencode");
+        if (!existsSync(d)) { try { mkdirSync(d, { recursive: true }); } catch {} }
+      } catch {}
+
+      const poll = () => {
+        try {
+          if (!existsSync(STATUS_FILE)) { _text = "• 🧠 " + VERSION; return; }
+          const data = JSON.parse(readFileSync(STATUS_FILE, "utf-8"));
+          _text = (data.ingesting && data.progress > 0)
+            ? "• 🧠 ingest " + data.progress + "%"
+            : "• 🧠 " + VERSION;
+        } catch { _text = "• 🧠 " + VERSION; }
+      };
+
+      poll();
+      _timer = setInterval(poll, 2000);
+
+      api.slots.register({
+        order: 999,
+        dispose() { if (_timer) { clearInterval(_timer); _timer = null; } },
+        slots: { app_bottom: (_ctx, _props) => _text },
+      });
+    },
+  };
+})();
+
+export default { server: _serverPlugin, tui: _tuiBrain.tui };
