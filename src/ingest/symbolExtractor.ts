@@ -352,27 +352,19 @@ class SymbolExtractor {
     }
   }
 
-  /**
-   * Extract symbols with a 10-second timeout guard.
-   * On timeout, returns empty array and logs a warning.
-   */
   async extractSymbolsWithTimeout(
     content: string,
     filePath: string,
   ): Promise<ExtractedSymbol[]> {
-    const abortController = new AbortController();
-
     try {
       const result = await Promise.race([
         this.extractSymbols(content, filePath),
-        new Promise<never>((_, reject) => {
-          const timer = setTimeout(() => {
-            abortController.abort();
-            reject(new Error("Tree-sitter symbol extraction timed out"));
-          }, EXTRACTION_TIMEOUT_MS);
-          // Allow GC of timer if extraction completes first
-          if (abortController.signal.aborted) clearTimeout(timer);
-        }),
+        new Promise<ExtractedSymbol[]>((_, reject) =>
+          setTimeout(
+            () => reject(new Error("Tree-sitter symbol extraction timed out")),
+            EXTRACTION_TIMEOUT_MS,
+          ),
+        ),
       ]);
       return result;
     } catch (err) {

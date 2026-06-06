@@ -235,6 +235,8 @@ export async function ingestPath(
       }
 
       // ── 9. Insert chunks (includes token_count) ───────────────────────
+      // Clean up old chunks for this file before inserting new ones
+      db.run("DELETE FROM chunks WHERE file_id = ?", [fileId]);
       const newChunkIds: string[] = [];
       for (const chunk of chunks) {
         try {
