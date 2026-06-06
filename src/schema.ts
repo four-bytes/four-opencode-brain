@@ -21,6 +21,11 @@ export function hashContent(content: string): string {
   return new Bun.CryptoHasher("sha256").update(content).digest("hex") as string;
 }
 
+/** Binary-safe SHA-256 hashing of raw file bytes (Uint8Array). */
+export function hashBuffer(buf: Uint8Array): string {
+  return new Bun.CryptoHasher("sha256").update(buf).digest("hex") as string;
+}
+
 // ---------------------------------------------------------------------------
 // Open (or create) brain.db at the given path, enable WAL + FK pragmas
 // ---------------------------------------------------------------------------

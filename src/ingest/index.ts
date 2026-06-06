@@ -17,8 +17,7 @@ import { stat } from "fs/promises";
 import { resolve } from "path";
 import type { Database } from "bun:sqlite";
 
-import { generateId, hashContent } from "../schema";
-import { sessionCache } from "../cache";
+import { generateId, hashBuffer } from "../schema";
 import { log } from "../logger";
 import { resolveFiles, detectLanguage } from "./loader";
 import { chunkContent, type Chunk } from "./chunker";
@@ -49,15 +48,6 @@ export interface IngestOptions {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/** Compute SHA-256 content hash with session cache. */
-function hashCached(content: string): string {
-  const cached = sessionCache.hashes.get(content);
-  if (cached) return cached;
-  const h = hashContent(content);
-  sessionCache.hashes.set(content, h);
-  return h;
-}
 
 // ---------------------------------------------------------------------------
 // Main pipeline
@@ -129,18 +119,17 @@ export async function ingestPath(
       const filePath = walked.path;
       const language = walked.language;
 
-      // Read file content
-      let content: string;
+      // Read file as raw buffer — binary-safe hashing (avoids encoding issues)
+      let buf: ArrayBuffer;
       try {
-        const file = Bun.file(filePath);
-        content = await file.text();
+        buf = await Bun.file(filePath).arrayBuffer();
       } catch (err) {
         result.errors.push(`Failed to read ${filePath}: ${String(err)}`);
         continue;
       }
 
-      const size = Buffer.byteLength(content, "utf-8");
-      const contentHash = hashCached(content);
+      const contentHash = hashBuffer(new Uint8Array(buf));
+      const size = buf.byteLength;
 
       // ── 4. Content-hash check — skip if unchanged (unless reIndex) ──
       if (!reIndex) {
@@ -155,6 +144,9 @@ export async function ingestPath(
           continue;
         }
       }
+
+      // Convert buffer to text for document/chunk storage
+      const content = new TextDecoder().decode(buf);
 
       // ── 5. Insert/update files table ───────────────────────────────
       const fileId = generateId();
