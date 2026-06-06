@@ -1,12 +1,12 @@
 {
   "name": "@four-bytes/four-opencode-brain",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Unified brain plugin — single SQLite DB for RAG search, memory, and knowledge base with content-hash dedup and per-session LRU cache",
   "license": "Apache-2.0",
   "type": "module",
   "main": "dist/four-opencode-brain.js",
   "scripts": {
-    "build": "bash scripts/build-vec.sh && bun build src/four-opencode-brain.ts --outdir=dist --target=bun --external '@opencode-ai/*' --external '@node-llama-cpp/*'",
+    "build": "bash scripts/build-vec.sh && bun build src/four-opencode-brain.ts --outdir=dist --target=bun --external '@opencode-ai/*' --external '@node-llama-cpp/*' && bun build src/brain-tui.ts --outdir=dist --target=bun --external '@opencode-ai/*' --external '@opentui/*' --external 'solid-js' --external 'fs' --external 'os' --external 'path'",
     "test": "bun test"
   },
   "keywords": [
@@ -22,5 +22,10 @@
     "tree-sitter-typescript": "^0.23.2",
     "node-llama-cpp": "^3.18.1",
     "web-tree-sitter": "^0.26.9"
+  },
+  "devDependencies": {
+    "@opentui/core": "0.3.2",
+    "@opentui/solid": "0.3.2",
+    "solid-js": "1.9.13"
   }
 }

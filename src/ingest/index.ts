@@ -47,6 +47,9 @@ export interface IngestOptions {
   reIndex?: boolean;
   /** Project path for project_hash tagging on documents and symbols. */
   project?: string;
+  /** Called after each file chunk+embed for progress reporting.
+   *  Receives { current, total } — current is 0-based, total is filesFound. */
+  progressCallback?: (progress: { current: number; total: number }) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -347,6 +350,7 @@ export async function ingestPath(
       }
 
       result.filesIndexed++;
+      options?.progressCallback?.({ current: result.filesIndexed, total: walkedFiles.length });
     }
 
     // ── Commit ────────────────────────────────────────────────────────

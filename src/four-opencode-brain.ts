@@ -51,6 +51,47 @@ function showToast(
   }
 }
 
+/**
+ * Calculate ingest timeout dynamically based on file count.
+ *
+ * Heuristic: 10 files/s average throughput, minimum 5 minutes, cap at 30 minutes.
+ * Formula: Math.max(300_000, Math.min(1_800_000, fileCount * 100))
+ *
+ * This replaces the old hard 120s timeout that caused failures on large projects.
+ */
+function calculateIngestTimeout(fileCount: number): number {
+  const PER_FILE_MS = 100;          // 10 files/s → 100ms per file
+  const MIN_TIMEOUT = 300_000;      // 5 minutes minimum
+  const MAX_TIMEOUT = 1_800_000;    // 30 minutes cap (matches four-opencode-rag)
+  return Math.max(MIN_TIMEOUT, Math.min(MAX_TIMEOUT, fileCount * PER_FILE_MS));
+}
+
+
+/** Shared status file for TUI companion plugin — polls this to render footer. */
+import { writeFileSync, mkdirSync, existsSync } from "fs";
+import { homedir } from "os";
+import { join } from "path";
+
+const STATUS_FILE = join(homedir(), ".cache", "opencode", "brain-status.json");
+
+function writeStatus(data: Record<string, unknown>): void {
+  try {
+    const dir = join(homedir(), ".cache", "opencode");
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    writeFileSync(STATUS_FILE, JSON.stringify({ ...data, updated: Date.now() }));
+  } catch {
+    // Never crash on status file failure
+  }
+}
+
+function clearStatus(): void {
+  try {
+    if (existsSync(STATUS_FILE)) writeFileSync(STATUS_FILE, JSON.stringify({ ingesting: false, version: VERSION }));
+  } catch {
+    // Ignore
+  }
+}
+
 export default (async (input: PluginInput) => {
   const { client, project, directory, $ } = input;
 
@@ -73,27 +114,49 @@ export default (async (input: PluginInput) => {
 
     // Fire-and-forget — don't block plugin readiness
     (async () => {
-      // Quick preliminary file count for toast
+      // Quick preliminary file count for toast + timeout calculation
       let fileCount = 0;
       try {
         const walked = await resolveFiles(directory, true);
         fileCount = walked.files.length;
-        showToast(client, `Indexing ${fileCount} files...`, "info", "Brain");
+        const timeoutS = (calculateIngestTimeout(fileCount) / 1000).toFixed(0);
+        showToast(client, `🧠 Indexing ${fileCount} files… (timeout: ${timeoutS}s)`, "info", "Brain");
       } catch {
-        showToast(client, `Indexing ${project?.name ?? "project"}…`, "info", "Brain");
+        showToast(client, `🧠 Indexing ${project?.name ?? "project"}…`, "info", "Brain");
       }
 
       const ingestDb = initBrainDatabase();
+      const timeoutMs = calculateIngestTimeout(fileCount);
+      let lastToastPercent = 0;
       try {
         const result = await withTimeout(
-          ingestPath(ingestDb, directory, { recursive: true, reIndex: false, project: directory }),
-          120_000,
+          ingestPath(ingestDb, directory, {
+            recursive: true,
+            reIndex: false,
+            project: directory,
+            progressCallback: ({ current, total }) => {
+              const pct = total > 0 ? Math.round((current / total) * 100) : 0;
+              // Emit progress toast every 25% to avoid spam
+              if (pct >= lastToastPercent + 25 || pct >= 100) {
+                lastToastPercent = Math.floor(pct / 25) * 25;
+                showToast(
+                  client,
+                  `\u{1f9e0} ${pct}% — ${current}/${total} files`,
+                  "info",
+                  "Brain Ingest",
+                );
+                writeStatus({ ingesting: true, progress: pct, current, total, version: VERSION });
+              }
+            },
+          }),
+          timeoutMs,
           `auto-ingest ${directory}`,
         );
         if (result.filesFound === 0) {
           const dirname = directory.split("/").filter(Boolean).pop() ?? directory;
-          const msg = `Found 0 files in ${dirname} — check path`;
+          const msg = `🧠 Found 0 files in ${dirname} — check path`;
           showToast(client, msg, "warning", "Brain");
+          writeStatus({ ingesting: false, progress: 0, current: 0, total: 0, version: VERSION });
           log("warn", "auto-ingest", msg, {
             filesFound: result.filesFound,
             filesSkipped: result.filesSkipped,
@@ -103,8 +166,9 @@ export default (async (input: PluginInput) => {
             directory,
           });
         } else {
-          const msg = `Indexed ${result.filesIndexed} new, ${result.filesSkipped} skipped in ${(result.durationMs / 1000).toFixed(1)}s`;
+          const msg = `🧠 Indexed ${result.filesIndexed} new, ${result.filesSkipped} skipped in ${(result.durationMs / 1000).toFixed(1)}s`;
           showToast(client, msg, "success", "Brain");
+          writeStatus({ ingesting: false, progress: 100, current: result.filesIndexed, total: result.filesFound, version: VERSION });
           log("info", "auto-ingest", msg, {
             filesFound: result.filesFound,
             filesIndexed: result.filesIndexed,
@@ -116,11 +180,11 @@ export default (async (input: PluginInput) => {
         }
       } catch (err) {
         if (err instanceof TimeoutError) {
-          const msg = `Auto-ingest timed out after 120s — partial results`;
+          const msg = `🧠 Auto-ingest timed out after ${(timeoutMs / 1000).toFixed(0)}s — partial results`;
           showToast(client, msg, "warning", "Brain");
-          log("warn", "auto-ingest", msg, { directory });
+          log("warn", "auto-ingest", msg, { directory, timeoutMs });
         } else {
-          const errMsg = `Auto-ingest failed: ${String(err)}`;
+          const errMsg = `🧠 Auto-ingest failed: ${String(err)}`;
           showToast(client, errMsg, "error", "Brain");
           log("error", "auto-ingest", errMsg);
         }
@@ -143,7 +207,7 @@ export default (async (input: PluginInput) => {
     const errDetail = getVec0Error();
     if (errDetail && !isVec0Loaded()) {
       log("warn", "vec0", `vec0 extension not available — vector search disabled. Chunk search falls back to SQL. (${errDetail})`, { platform: process.platform, arch: process.arch });
-      showToast(client, `vec0 extension unavailable — vector search disabled: ${errDetail}`, "error", "Brain");
+      showToast(client, `🧠 vec0 extension unavailable — vector search disabled: ${errDetail}`, "error", "Brain");
     }
     checkDb.close();
   }
@@ -156,7 +220,7 @@ export default (async (input: PluginInput) => {
         .query<{ c: number }, []>("SELECT COUNT(*) AS c FROM files")
         .get()!;
       if (fileCount.c === 0 && !autoIngest) {
-        showToast(client, "Brain initialized — use /brain ingest to index", "info", "Brain");
+        showToast(client, "🧠 Brain initialized — use /brain ingest to index", "info", "Brain");
       }
     } catch {
       // DB might not have tables yet on truly first run — ignore
@@ -180,16 +244,31 @@ export default (async (input: PluginInput) => {
         // Resolve path relative to project directory (like RAG plugin does)
         const name = basename(resolvedPath);
         toolCtx.metadata({ title: `Indexing ${name}…` });
+
+        // Walk first to get file count for dynamic timeout
+        let fileCount = 0;
+        try {
+          const walked = await resolveFiles(resolvedPath, args.recursive !== false);
+          fileCount = walked.files.length;
+        } catch {
+          // fallback: use default
+        }
+        const timeoutMs = calculateIngestTimeout(fileCount);
+
         const result = await withTimeout(
           ingestPath(db, resolvedPath, {
             recursive: args.recursive !== false,
             reIndex: args.reIndex === true,
             project: toolCtx.directory,
+            progressCallback: ({ current, total }) => {
+              const pct = total > 0 ? Math.round((current / total) * 100) : 0;
+              toolCtx.metadata({ title: `🧠 ${pct}% — ${current}/${total} — ${name}` });
+            },
           }),
-          120_000,
+          timeoutMs,
           `ingestPath(${resolvedPath})`,
         );
-        const msg = `Indexed ${result.filesIndexed} new, ${result.filesSkipped} skipped in ${(result.durationMs / 1000).toFixed(1)}s`;
+        const msg = `🧠 Indexed ${result.filesIndexed} new, ${result.filesSkipped} skipped in ${(result.durationMs / 1000).toFixed(1)}s`;
         toolCtx.metadata({
           title: msg,
           metadata: {
@@ -202,13 +281,13 @@ export default (async (input: PluginInput) => {
         return JSON.stringify(result);
       } catch (err) {
         if (err instanceof TimeoutError) {
-          const timeoutMsg = `Ingest timed out after 120s`;
+          const timeoutMsg = `🧠 Ingest timed out after ${(timeoutMs / 1000).toFixed(0)}s`;
           toolCtx.metadata({ title: timeoutMsg });
           showToast(client, timeoutMsg, "warning", "Brain Ingest");
           log("warn", "ingest-timeout", timeoutMsg, { path: resolvedPath });
           return JSON.stringify({ error: timeoutMsg, partial: true });
         }
-        const errMsg = `Ingest error: ${String(err)}`;
+        const errMsg = `🧠 Ingest error: ${String(err)}`;
         toolCtx.metadata({ title: errMsg });
         showToast(client, errMsg, "error", "Brain Ingest");
         return JSON.stringify({ error: String(err) });
