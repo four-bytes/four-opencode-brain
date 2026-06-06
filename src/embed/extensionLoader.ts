@@ -2,6 +2,10 @@
 // Vec0 extension loader — loads the vec0 SQLite extension from the build
 // output at dist/extensions/<platform>/vec0.so (produced by scripts/build-vec.sh).
 // No cache fallback — only the shipped build output is used.
+// 
+// Per-handle loading via WeakSet: each Database handle independently loads
+// the extension. The RAG plugin loads once per server instance; the brain
+// plugin opens a fresh handle per tool call — so we track per-handle.
 // ---------------------------------------------------------------------------
 
 import { join } from "path";
@@ -32,20 +36,31 @@ function extSuffix(): string {
 }
 
 /**
- * Try to load vec0 extension into the given database handle.
- * Looks only at dist/extensions/<platform>/vec0.<ext> — the shipped build output.
- * Returns true if loaded successfully, false if extension not found or load failed.
- * Maintains a static loaded flag to avoid redundant loadExtension calls.
+ * Per-handle tracking: which Database handles already have vec0 loaded.
+ * WeakSet allows GC of closed handles without explicit bookkeeping.
  */
-let loaded = false;
+const loadedHandles = new WeakSet<Database>();
 
 /**
  * Error message from the last load attempt, for diagnostics.
  */
 let lastError: string | null = null;
 
+/**
+ * Whether at least one handle has ever been successfully loaded.
+ * Used for startup toasts / diagnostics.
+ */
+let anyLoaded = false;
+
+/**
+ * Try to load vec0 extension into the given database handle.
+ * Looks only at dist/extensions/<platform>/vec0.<ext> — the shipped build output.
+ * Returns true if loaded successfully (or already loaded on this handle),
+ * false if extension not found or load failed.
+ */
 export function loadVec0(db: Database): boolean {
-  if (loaded) return true;
+  // Already loaded on this specific handle
+  if (loadedHandles.has(db)) return true;
 
   const pDir = platformDir();
   if (!pDir) {
@@ -56,12 +71,12 @@ export function loadVec0(db: Database): boolean {
   const ext = extSuffix();
   const initFn = "sqlite3_vec_init";
 
-  // Try both locations for the extension:
-  // 1. Bundled: dist/extensions/<platform>/vec0.<ext> (import.meta.dir = dist/)
-  // 2. Source:  ../../dist/extensions/<platform>/vec0.<ext> (import.meta.dir = src/embed/)
+  // Try multiple locations for the extension:
+  // 1. process.cwd()/dist/extensions/<platform>/vec0.<ext> (development mode)
+  // 2. import.meta.dir/extensions/<platform>/vec0.<ext> (bundled under dist/)
+  // 3. ../../dist/extensions/<platform>/vec0.<ext> (from src/embed/ to project root)
   const resolved = import.meta.dir;
   const candidates = [
-    // Fallback: try relative to process.cwd() (development mode)
     join(process.cwd(), "dist", "extensions", pDir, `vec0.${ext}`),
     join(resolved, "extensions", pDir, `vec0.${ext}`),
     join(resolved, "..", "..", "dist", "extensions", pDir, `vec0.${ext}`),
@@ -82,7 +97,8 @@ export function loadVec0(db: Database): boolean {
 
   try {
     db.loadExtension(localPath, initFn);
-    loaded = true;
+    loadedHandles.add(db);
+    anyLoaded = true;
     lastError = null;
     return true;
   } catch (err: unknown) {
@@ -99,16 +115,17 @@ export function getVec0Error(): string | null {
 }
 
 /**
- * Check whether vec0 has been successfully loaded (at least once).
+ * Check whether vec0 has been successfully loaded on at least one handle.
  */
 export function isVec0Loaded(): boolean {
-  return loaded;
+  return anyLoaded;
 }
 
 /**
  * Reset loaded state (useful for testing).
  */
 export function resetVec0Loaded(): void {
-  loaded = false;
+  anyLoaded = false;
   lastError = null;
+  // WeakSet cannot be cleared — individual handles will be GC'd naturally
 }
