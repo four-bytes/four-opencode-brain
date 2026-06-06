@@ -1,114 +1,80 @@
-<img src="icon.svg" alt="four-opencode-brain" width="96" height="96" align="right">
+# 🧠 four-opencode-brain
 
-# @four-bytes/four-opencode-brain
+**Unified brain plugin for [opencode](https://github.com/sst/opencode)** — single SQLite database for RAG search, memory, and knowledge base.
 
-> Unified brain plugin for [opencode](https://github.com/opencode-ai/opencode) — single SQLite database for RAG search, session memory, and knowledge base with hybrid search (FTS5 + vec0 vector extension).
+[![npm](https://img.shields.io/npm/v/@four-bytes/four-opencode-brain)](https://www.npmjs.com/package/@four-bytes/four-opencode-brain)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
-![License](https://img.shields.io/badge/license-Apache%202.0-blue)
-[![npm version](https://img.shields.io/npm/v/@four-bytes/four-opencode-brain)](https://www.npmjs.com/package/@four-bytes/four-opencode-brain)
+## Features
 
-## Status
-
-**v1.0.0** — stable release. See [HISTORY.md](HISTORY.md) for changelog.
-
-## Architecture
-
-"One brain, three internal engines":
-
-```
-┌──────────────────────────────────────────────────────┐
-│              four-opencode-brain v1.0.0              │
-├───────────┬───────────────┬──────────────────────────┤
-│  Search   │    Memory     │   Knowledge Base          │
-│ FTS5+vec0 │   SQLite DB   │   Confidence-gated       │
-│  Hybrid   │   Auto-capture│   Problem Store           │
-│  Symbol   │   Diary       │   REGATE lifecycle       │
-├───────────┴───────────────┴──────────────────────────┤
-│  Cache (LRU) · Logger · Hooks · Config · CLI         │
-└──────────────────────────────────────────────────────┘
-```
-
-### Embedding Pipeline
-
-```
-File → Loader → Chunker (token-based, 512-token windows, 77-token overlap)
-  → Content-hash dedup → Documents table → FTS5 index
-  → Symbol extraction (tree-sitter: TS, JS, PHP, Rust)
-  → vec0 vector index (384-dim embeddings via node-llama-cpp or hash-based fallback)
-  → RRF fusion (weighted: FTS5 1.0x / vec0 0.8x fallback, or 0.8x/1.0x real model)
-```
-
-## Tools (10 total)
-
-The plugin registers 10 tools:
-
-| Tool | Description |
-|------|-------------|
-| `brain_ingest` | Ingest files/directories with content-hash dedup |
-| `brain_search` | Unified FTS5 search across docs, memories, knowledge |
-| `brain_reindex` | Rebuild vec0 vector index from chunks |
-| `brain_memory` | Memory CRUD: add, search, list, forget, diary, get |
-| `brain_kb_add` | Add/update knowledge entry (confidence-gated) |
-| `brain_kb_get` | Get knowledge entry + occurrences + revisions |
-| `brain_kb_record` | Record occurrence outcome for knowledge entry |
-| `brain_kb_review` | Update review-state with REGATE enforcement |
-| `brain_kb_search` | FTS5 search knowledge entries with filters |
-| `brain_kb_stats` | Knowledge store statistics and distribution |
+- **Hybrid Search** — FTS5 full-text + vec0 vector search with RRF fusion
+- **Memory** — Session-scoped notes, decisions, patterns, errors, diary entries
+- **Knowledge Base** — Problem-centric entries with confidence gating and review lifecycle
+- **Auto-Ingest** — Indexes project files on startup (git repos only)
+- **TUI Status Bar** — Live spinner, progress, and completion indicators
+- **Content-Hash Dedup** — Skips unchanged files automatically
 
 ## Installation
 
 ```bash
-bun add @four-bytes/four-opencode-brain
+npm install @four-bytes/four-opencode-brain
 ```
 
-Or in your opencode config:
+Or install via opencode's plugin marketplace.
 
-```json
-{
-  "plugins": ["@four-bytes/four-opencode-brain"]
-}
-```
+## Quick Start
 
-## Usage
-
-The plugin registers `/brain` slash commands and 10 tools. Key operations:
-
-- **Ingest**: `/brain-ingest <path>` or `brain_ingest` tool
-- **Search**: `brain_search` tool — always use before grep/glob
-- **Memory**: `brain_memory` tool with mode: add, search, list, forget, diary, get
-- **Knowledge**: `brain_kb_*` tools for add, get, record, review, search, stats
-
-Auto-capture triggers on session idle to store decisions as memories.
-
-### CLI
-
-Standalone CLI for development and scripting:
+After installation, the brain auto-ingests your project on startup (git repos only). You can also:
 
 ```bash
-bun run src/cli.ts ingest <path>
-bun run src/cli.ts search <query>
-bun run src/cli.ts memory list
-bun run src/cli.ts stats
+# In opencode
+/brain ingest .           # Index current directory
+/brain search "function"  # Search indexed code
 ```
 
-### Configuration (via environment variables)
+## Tools
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `BRAIN_HOME` | `~/.local/share/four-opencode-brain` | Database and cache directory |
-| `BRAIN_AUTO_INGEST` | `true` | Auto-ingest on startup |
-| `BRAIN_DEBUG` | `false` | Enable debug logging |
-| `BRAIN_MAX_FILE_SIZE_MB` | `10` | Max file size for ingestion |
-| `BRAIN_CHUNK_MAX_TOKENS` | `1024` | Max tokens per chunk |
+| Tool | Description |
+|------|-------------|
+| `brain_search` | Unified FTS5+vec0 hybrid search across docs, memories, knowledge |
+| `brain_ingest` | Index files/directories with content-hash dedup |
+| `brain_reindex` | Rebuild vec0 vector index from chunks |
+| `brain_memory` | CRUD for memories — add, search, list, forget, diary, get |
+| `brain_kb_add` | Add/update knowledge entries (draft by default) |
+| `brain_kb_get` | Get knowledge entry + occurrences + revisions |
+| `brain_kb_record` | Record occurrence outcome (fixed, failed, workaround, observed) |
+| `brain_kb_review` | Update review state (draft → reviewed → accepted) |
+| `brain_kb_search` | FTS5 search knowledge entries |
+| `brain_kb_stats` | Knowledge store statistics |
 
-## Token Budget
+## Configuration
 
-Tool descriptions + system prompt: **~262 tokens** (budget: 400).
+| Env Var | Default | Description |
+|---------|---------|-------------|
+| `BRAIN_AUTO_INGEST` | `true` | Auto-index on startup (git repos only) |
+| `BRAIN_DEBUG` | unset | Enable debug logging to stderr |
 
-## Development
+## Requirements
 
-See [CONTRIBUTE.md](CONTRIBUTE.md) for workflow and [SETUP.md](docs/SETUP.md) for machine setup.
+- **Bun** ≥ 1.0
+- **opencode** with plugin support
+- **vec0** SQLite extension (bundled for linux-x64, linux-arm64, darwin-x64, darwin-arm64)
+
+## Architecture
+
+```
+src/
+├── ingest/       File walker, chunker, embed, symbol extraction
+├── search/       FTS5 + vec0 hybrid search with RRF fusion
+├── memory/       Session/project-scoped notes (SQLite)
+├── knowledge/    Problem-centric entries (confidence + review)
+├── hooks/        System prompt + auto-capture triggers
+├── embed/        Vec0 extension loader + embedding pipeline
+├── status.ts     Unified status bar + toast updates
+├── tui.tsx       SolidJS status bar component (theme-aware)
+└── shared.ts     Shared constants
+```
 
 ## License
 
-Apache-2.0 — see [LICENSE](LICENSE)
+Apache-2.0 © four-bytes
