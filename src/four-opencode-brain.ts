@@ -158,11 +158,11 @@ const _serverPlugin = async (input: PluginInput) => {
         const walked = await resolveFiles(directory, true);
         fileCount = walked.files.length;
         const timeoutS = (calculateIngestTimeout(fileCount) / 1000).toFixed(0);
-        showToast(client, `🧠 Indexing ${fileCount} files… (timeout: ${timeoutS}s)`, "info", "Brain");
-        writeStatus({ phase: 'ingest', ingesting: true, progress: 0, current: 0, total: fileCount, version: VERSION });
+        showToast(client, `Indexing ${fileCount} files… (timeout: ${timeoutS}s)`, "info", "Brain 🧠");
+        writeStatus({ phase: 'ingest', scanning: false, ingesting: true, progress: 0, current: 0, total: fileCount, version: VERSION });
       } catch {
-        showToast(client, `🧠 Indexing ${project?.name ?? "project"}…`, "info", "Brain");
-        writeStatus({ phase: 'ingest', ingesting: true, progress: 0, version: VERSION });
+        showToast(client, `Indexing ${project?.name ?? "project"}…`, "info", "Brain 🧠");
+        writeStatus({ phase: 'ingest', scanning: false, ingesting: true, progress: 0, version: VERSION });
       }
 
       const ingestDb = initBrainDatabase();
@@ -185,7 +185,7 @@ const _serverPlugin = async (input: PluginInput) => {
         if (result.filesFound === 0) {
           const dirname = directory.split("/").filter(Boolean).pop() ?? directory;
           const msg = `🧠 Found 0 files in ${dirname} — check path`;
-          showToast(client, msg, "warning", "Brain");
+          showToast(client, msg.replace("🧠 ", ""), "warning", "Brain 🧠");
           writeStatus({ phase: 'idle', ingesting: false, progress: 0, current: 0, total: 0, version: VERSION });
           log("warn", "auto-ingest", msg, {
             filesFound: result.filesFound,
@@ -197,7 +197,7 @@ const _serverPlugin = async (input: PluginInput) => {
           });
         } else {
           const msg = `🧠 Indexed ${result.filesIndexed} new, ${result.filesSkipped} skipped in ${(result.durationMs / 1000).toFixed(1)}s`;
-          showToast(client, msg, "success", "Brain");
+          showToast(client, msg.replace("🧠 ", ""), "success", "Brain 🧠");
           writeStatus({ phase: 'idle', ingesting: false, progress: 100, current: result.filesIndexed, total: result.filesFound, version: VERSION });
           log("info", "auto-ingest", msg, {
             filesFound: result.filesFound,
@@ -211,12 +211,12 @@ const _serverPlugin = async (input: PluginInput) => {
       } catch (err) {
         if (err instanceof TimeoutError) {
           const msg = `🧠 Auto-ingest timed out after ${(timeoutMs / 1000).toFixed(0)}s — partial results`;
-          showToast(client, msg, "warning", "Brain");
+          showToast(client, msg.replace("🧠 ", ""), "warning", "Brain 🧠");
           writeStatus({ phase: 'idle', ingesting: false, version: VERSION });
           log("warn", "auto-ingest", msg, { directory, timeoutMs });
         } else {
           const errMsg = `🧠 Auto-ingest failed: ${String(err)}`;
-          showToast(client, errMsg, "error", "Brain");
+          showToast(client, errMsg.replace("🧠 ", ""), "error", "Brain 🧠");
           writeStatus({ phase: 'idle', ingesting: false, version: VERSION });
           log("error", "auto-ingest", errMsg);
         }
@@ -243,7 +243,7 @@ const _serverPlugin = async (input: PluginInput) => {
     const errDetail = getVec0Error();
     if (errDetail && !isVec0Loaded()) {
       log("warn", "vec0", `vec0 extension not available — vector search disabled. Chunk search falls back to SQL. (${errDetail})`, { platform: process.platform, arch: process.arch });
-      showToast(client, `🧠 vec0 extension unavailable — vector search disabled: ${errDetail}`, "error", "Brain");
+      showToast(client, `vec0 extension unavailable — vector search disabled: ${errDetail}`, "error", "Brain 🧠");
     }
     checkDb.close();
   }
@@ -256,7 +256,7 @@ const _serverPlugin = async (input: PluginInput) => {
         .query<{ c: number }, []>("SELECT COUNT(*) AS c FROM files")
         .get()!;
       if (fileCount.c === 0 && !autoIngest) {
-        showToast(client, "🧠 Brain initialized — use /brain ingest to index", "info", "Brain");
+        showToast(client, "Brain initialized — use /brain ingest to index", "info", "Brain 🧠");
       }
     } catch {
       // DB might not have tables yet on truly first run — ignore
@@ -319,19 +319,19 @@ const _serverPlugin = async (input: PluginInput) => {
             durationMs: result.durationMs,
           },
         });
-        showToast(client, msg, "success", "Brain Ingest");
+        showToast(client, msg.replace("🧠 ", ""), "success", "Brain 🧠");
         return JSON.stringify(result);
       } catch (err) {
         if (err instanceof TimeoutError) {
           const timeoutMsg = `🧠 Ingest timed out after ${(timeoutMs / 1000).toFixed(0)}s`;
           toolCtx.metadata({ title: timeoutMsg });
-          showToast(client, timeoutMsg, "warning", "Brain Ingest");
+          showToast(client, timeoutMsg.replace("🧠 ", ""), "warning", "Brain 🧠");
           log("warn", "ingest-timeout", timeoutMsg, { path: resolvedPath });
           return JSON.stringify({ error: timeoutMsg, partial: true });
         }
         const errMsg = `🧠 Ingest error: ${String(err)}`;
         toolCtx.metadata({ title: errMsg });
-        showToast(client, errMsg, "error", "Brain Ingest");
+        showToast(client, errMsg.replace("🧠 ", ""), "error", "Brain 🧠");
         return JSON.stringify({ error: String(err) });
       } finally {
         db.close();

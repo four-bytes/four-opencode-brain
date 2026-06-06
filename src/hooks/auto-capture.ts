@@ -355,7 +355,7 @@ export async function onSessionIdle(
     });
 
     if (client && (decisionsSaved + consideredSaved + errorsSaved) > 0) {
-      showToast(client, `🧠 Auto-captured ${summaryText}`, "success", "Brain");
+      showToast(client, `Auto-captured ${summaryText}`, "success", "Brain 🧠");
     }
   } finally {
     if (!db) conn.close();
