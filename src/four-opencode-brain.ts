@@ -290,6 +290,9 @@ export default (async (input: PluginInput) => {
             return JSON.stringify({ ok: memoryForget(db, args.id as string) });
           case "diary":
             if (args.subMode === "add") {
+              if (!args.diaryTitle || !args.diaryContent) {
+                return JSON.stringify({ error: "diaryTitle and diaryContent required for subMode=add" });
+              }
               diaryAdd(db, {
                 title: args.diaryTitle as string,
                 content: args.diaryContent as string,
