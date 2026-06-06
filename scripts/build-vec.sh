@@ -75,3 +75,14 @@ fi
 cp "$TEMP_DIR/$SOURCE_FILE" "$OUT_DIR/$TARGET_FILE"
 echo "[build-vec] Installed: $OUT_DIR/$TARGET_FILE"
 ls -lh "$OUT_DIR/$TARGET_FILE"
+
+# ---- Copy Tree-sitter WASM files to dist/ ----
+echo "[build-vec] Copying Tree-sitter WASM files..."
+WASM_DIR="$ROOT/dist"
+mkdir -p "$WASM_DIR"
+
+cp "$ROOT/node_modules/web-tree-sitter/web-tree-sitter.wasm" "$WASM_DIR/" 2>/dev/null || echo "[build-vec] WARNING: web-tree-sitter.wasm not found"
+cp "$ROOT/node_modules/tree-sitter-typescript/tree-sitter-typescript.wasm" "$WASM_DIR/" 2>/dev/null || echo "[build-vec] WARNING: tree-sitter-typescript.wasm not found"
+cp "$ROOT/node_modules/tree-sitter-typescript/tree-sitter-tsx.wasm" "$WASM_DIR/" 2>/dev/null || echo "[build-vec] WARNING: tree-sitter-tsx.wasm not found"
+cp "$ROOT/node_modules/tree-sitter-javascript/tree-sitter-javascript.wasm" "$WASM_DIR/" 2>/dev/null || echo "[build-vec] WARNING: tree-sitter-javascript.wasm not found"
+cp "$ROOT/node_modules/tree-sitter-php/tree-sitter-php.wasm" "$WASM_DIR/" 2>/dev/null || echo "[build-vec] WARNING: tree-sitter-php.wasm not found"
