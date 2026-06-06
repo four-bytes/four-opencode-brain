@@ -54,6 +54,27 @@ export interface IngestOptions {
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
 
 // ---------------------------------------------------------------------------
+// Progress event helpers (gated on BRAIN_DEBUG=true)
+// ---------------------------------------------------------------------------
+
+function emitProgressEvent(
+  event: string,
+  data: Record<string, unknown>,
+): void {
+  if (process.env.BRAIN_DEBUG !== "true") return;
+  try {
+    const payload = JSON.stringify({
+      event,
+      ...data,
+      timestamp: new Date().toISOString(),
+    });
+    process.stderr.write(payload + "\n");
+  } catch {
+    // never crash on progress emission
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Main pipeline
 // ---------------------------------------------------------------------------
 
@@ -109,8 +130,14 @@ export async function ingestPath(
 
   result.filesFound = walkedFiles.length;
 
+  emitProgressEvent("ingest.start", {
+    totalFiles: walkedFiles.length,
+    targetPath: absolutePath,
+  });
+
   if (walkedFiles.length === 0) {
     result.durationMs = Date.now() - startTime;
+    emitProgressEvent("ingest.done", { result });
     return result;
   }
 
@@ -119,9 +146,15 @@ export async function ingestPath(
   db.exec(`SAVEPOINT ${sp}`);
 
   try {
-    for (const walked of walkedFiles) {
+    for (const [i, walked] of walkedFiles.entries()) {
       const filePath = walked.path;
       const language = walked.language;
+
+      emitProgressEvent("ingest.progress", {
+        current: i + 1,
+        total: walkedFiles.length,
+        file: filePath,
+      });
 
       // ── 4. 10MB file size cap (before reading content) ───────────────
       let fileStats;
@@ -288,5 +321,6 @@ export async function ingestPath(
   }
 
   result.durationMs = Date.now() - startTime;
+  emitProgressEvent("ingest.done", { result });
   return result;
 }
