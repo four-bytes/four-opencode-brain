@@ -59,8 +59,10 @@ export function loadVec0(db: Database): boolean {
   // Try both locations for the extension:
   // 1. Bundled: dist/extensions/<platform>/vec0.<ext> (import.meta.dir = dist/)
   // 2. Source:  ../../dist/extensions/<platform>/vec0.<ext> (import.meta.dir = src/embed/)
-  const resolved = import.meta.dir ?? __dirname;
+  const resolved = import.meta.dir;
   const candidates = [
+    // Fallback: try relative to process.cwd() (development mode)
+    join(process.cwd(), "dist", "extensions", pDir, `vec0.${ext}`),
     join(resolved, "extensions", pDir, `vec0.${ext}`),
     join(resolved, "..", "..", "dist", "extensions", pDir, `vec0.${ext}`),
   ];
