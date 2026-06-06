@@ -33,6 +33,7 @@ import { loadVec0 } from "../embed/extensionLoader";
 export interface IngestResult {
   filesFound: number;
   filesSkipped: number; // hash match — already indexed
+  filesProcessed: number; // total processed (indexed + skipped)
   filesIndexed: number; // new or updated
   unsupported: number;  // excluded at walk time — unsupported extension
   chunksCreated: number;
@@ -138,6 +139,7 @@ export async function ingestPath(
 
   const walkedFiles = walkResult.files;
   result.filesFound = walkedFiles.length;
+  result.filesProcessed = 0;
   result.unsupported = walkResult.skippedExt;
 
   emitProgressEvent("ingest.start", {
@@ -188,6 +190,7 @@ export async function ingestPath(
         buf = await Bun.file(filePath).arrayBuffer();
       } catch (err) {
         result.errors.push(`Failed to read ${filePath}: ${String(err)}`);
+        result.filesProcessed++;
         continue;
       }
 
@@ -210,6 +213,8 @@ export async function ingestPath(
 
         if (existing && existing.content_hash === contentHash) {
           result.filesSkipped++;
+          result.filesProcessed++;
+          options?.progressCallback?.({ current: result.filesProcessed, total: walkedFiles.length });
           continue;
         }
       }
@@ -350,7 +355,8 @@ export async function ingestPath(
       }
 
       result.filesIndexed++;
-      options?.progressCallback?.({ current: result.filesIndexed, total: walkedFiles.length });
+      result.filesProcessed++;
+      options?.progressCallback?.({ current: result.filesProcessed, total: walkedFiles.length });
     }
 
     // ── Commit ────────────────────────────────────────────────────────

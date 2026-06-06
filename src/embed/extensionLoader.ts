@@ -59,8 +59,8 @@ let anyLoaded = false;
  * false if extension not found or load failed.
  */
 export function loadVec0(db: Database): boolean {
-  // Already loaded on this specific handle
-  if (loadedHandles.has(db)) return true;
+  // Already loaded globally — vec0 only safe to load once per process
+  if (anyLoaded) return true;
 
   const pDir = platformDir();
   if (!pDir) {
@@ -97,7 +97,6 @@ export function loadVec0(db: Database): boolean {
 
   try {
     db.loadExtension(localPath, initFn);
-    loadedHandles.add(db);
     anyLoaded = true;
     lastError = null;
     return true;

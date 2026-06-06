@@ -6,11 +6,20 @@
     "moduleResolution": "bundler",
     "outDir": "dist",
     "rootDir": "src",
-    "lib": ["ESNext"],
+    "lib": [
+      "ESNext"
+    ],
     "jsx": "react-jsx",
-    "jsxImportSource": "solid-js",
-    "types": ["bun-types"]
+    "jsxImportSource": "@opentui/solid",
+    "types": [
+      "bun-types"
+    ]
   },
-  "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist"]
+  "include": [
+    "src/**/*"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist"
+  ]
 }

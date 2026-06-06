@@ -12,6 +12,8 @@ import { log } from "../logger";
 
 const SKIP_DIRS = new Set([
   "node_modules",
+  "vendor",
+  "bower_components",
   ".git",
   "dist",
   "build",
@@ -21,6 +23,19 @@ const SKIP_DIRS = new Set([
   ".vscode",
   "__pycache__",
   ".cache",
+  ".next",
+  ".nuxt",
+  ".turbo",
+  ".tox",
+  ".venv",
+  "venv",
+  ".eggs",
+  ".mypy_cache",
+  ".pytest_cache",
+  ".gradle",
+  "target",
+  "zig-cache",
+  "zig-out",
 ]);
 
 const EXTENSION_LANG_MAP: Record<string, string> = {
@@ -222,6 +237,9 @@ export async function walkDirectory(
           skippedExt++;
         } else {
           files.push({ path: fullPath, language });
+          if (files.length % 1000 === 0) {
+            log("info", "walker", `Scanning... ${files.length} files found (${skippedExt} skipped)`);
+          }
         }
       }
     }
@@ -237,6 +255,7 @@ export async function walkDirectory(
  * - If targetPath is a file, returns a single-entry array.
  * - If targetPath is a directory, walks it (optionally recursive).
  */
+let _scanCount = 0;
 export async function resolveFiles(
   targetPath: string,
   recursive: boolean = true,

@@ -1,13 +1,15 @@
 {
   "name": "@four-bytes/four-opencode-brain",
-  "version": "1.0.3",
-  "description": "Unified brain plugin — single SQLite DB for RAG search, memory, and knowledge base with content-hash dedup and per-session LRU cache",
+  "version": "1.0.26",
+  "description": "Unified brain plugin \u2014 single SQLite DB for RAG search, memory, and knowledge base with content-hash dedup and per-session LRU cache",
   "license": "Apache-2.0",
   "type": "module",
   "main": "dist/four-opencode-brain.js",
   "scripts": {
-    "build": "bash scripts/build-vec.sh && bun build src/four-opencode-brain.ts --outdir=dist --target=bun --external '@opencode-ai/*' --external '@node-llama-cpp/*'",
-    "test": "bun test"
+    "build": "bash scripts/build-vec.sh && NODE_ENV=production bun build src/four-opencode-brain.ts --outdir=dist --target=bun --external \"@opencode-ai/*\" --external \"@node-llama-cpp/*\"",
+    "test": "bun test",
+    "build:tui": "npx tsc src/tui.tsx --jsx preserve --skipLibCheck --moduleResolution bundler --target ESNext --module ESNext --outDir dist --out four-opencode-brain-tui.jsx --esModuleInterop",
+    "prepublishOnly": "npm run build && npm run build:tui"
   },
   "keywords": [
     "opencode",
@@ -27,5 +29,15 @@
     "@opentui/core": "0.3.2",
     "@opentui/solid": "0.3.2",
     "solid-js": "1.9.13"
+  },
+  "exports": {
+    ".": "dist/four-opencode-brain.js",
+    "./tui": {
+      "import": "./dist/four-opencode-brain-tui.jsx",
+      "config": {
+        "enabled": true,
+        "sidebar": true
+      }
+    }
   }
 }

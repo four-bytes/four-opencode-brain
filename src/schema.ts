@@ -154,6 +154,7 @@ export function openDatabase(dbPath?: string): Database {
 
   const db = new Database(resolvedPath);
   db.exec("PRAGMA journal_mode=WAL;");
+  db.exec("PRAGMA busy_timeout=5000;");
   db.exec("PRAGMA foreign_keys=ON;");
   return db;
 }
@@ -645,50 +646,57 @@ export function runMigrations(db: Database): void {
  *    ALTER TABLE ... ADD CHECK)
  */
 function migrateEntityTypeCheck(db: Database): void {
-  try {
-    // Check if the table already has the CHECK constraint by inspecting its DDL
-    const row = db
-      .query<{ sql: string }, []>(
-        "SELECT sql FROM sqlite_master WHERE type='table' AND name='knowledge_entries'",
-      )
-      .get();
+  // Check if already applied
+  const row = db
+    .query<{ sql: string }, []>(
+      "SELECT sql FROM sqlite_master WHERE type='table' AND name='knowledge_entries'",
+    )
+    .get();
 
-    if (row && row.sql && row.sql.includes("CHECK(entity_type IN")) {
-      // Constraint already exists — nothing to migrate
+  if (row && row.sql && row.sql.includes("CHECK(entity_type IN")) {
+    return;
+  }
+
+  // Retry up to 3 times with 1s delay for locked databases
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      db.run(
+        "UPDATE knowledge_entries SET entity_type = 'problem' WHERE entity_type IS NULL",
+      );
+
+      db.exec(`
+        CREATE TRIGGER IF NOT EXISTS knowledge_entries_check_entity_type_bi
+        BEFORE INSERT ON knowledge_entries
+        BEGIN
+          SELECT CASE
+            WHEN NEW.entity_type NOT IN ('problem','pattern','convention','decision','observation','fix','summary')
+            THEN RAISE(ABORT, 'Invalid entity_type: ' || NEW.entity_type)
+          END;
+        END
+      `);
+
+      db.exec(`
+        CREATE TRIGGER IF NOT EXISTS knowledge_entries_check_entity_type_bu
+        BEFORE UPDATE ON knowledge_entries
+        BEGIN
+          SELECT CASE
+            WHEN NEW.entity_type NOT IN ('problem','pattern','convention','decision','observation','fix','summary')
+            THEN RAISE(ABORT, 'Invalid entity_type: ' || NEW.entity_type)
+          END;
+        END
+      `);
+
+      log("info", "schema", "Applied entity_type CHECK migration via triggers");
       return;
+    } catch (err) {
+      if (attempt < 2) {
+        log("warn", "schema", `migration attempt ${attempt + 1} failed (locked), retrying...`);
+        // Busy-wait for 1s before retry
+        const start = Date.now();
+        while (Date.now() - start < 1000) { /* spin */ }
+      } else {
+        log("error", "schema", `entity_type CHECK migration failed after 3 attempts: ${String(err)}`);
+      }
     }
-
-    // Migrate existing NULL entity_types to 'problem'
-    db.run(
-      "UPDATE knowledge_entries SET entity_type = 'problem' WHERE entity_type IS NULL",
-    );
-
-    // Add BEFORE INSERT trigger for entity_type validation
-    db.exec(`
-      CREATE TRIGGER IF NOT EXISTS knowledge_entries_check_entity_type_bi
-      BEFORE INSERT ON knowledge_entries
-      BEGIN
-        SELECT CASE
-          WHEN NEW.entity_type NOT IN ('problem','pattern','convention','decision','observation','fix','summary')
-          THEN RAISE(ABORT, 'Invalid entity_type: ' || NEW.entity_type)
-        END;
-      END
-    `);
-
-    // Add BEFORE UPDATE trigger for entity_type validation
-    db.exec(`
-      CREATE TRIGGER IF NOT EXISTS knowledge_entries_check_entity_type_bu
-      BEFORE UPDATE ON knowledge_entries
-      BEGIN
-        SELECT CASE
-          WHEN NEW.entity_type NOT IN ('problem','pattern','convention','decision','observation','fix','summary')
-          THEN RAISE(ABORT, 'Invalid entity_type: ' || NEW.entity_type)
-        END;
-      END
-    `);
-
-    log("info", "schema", "Applied entity_type CHECK migration via triggers");
-  } catch (err) {
-    log("error", "schema", `entity_type CHECK migration failed: ${String(err)}`);
   }
 }
