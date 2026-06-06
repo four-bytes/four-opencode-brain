@@ -104,3 +104,8 @@ export function updateStatus(state: StatusState, opts?: StatusOpts): void {
       break;
   }
 }
+
+/** Convenience wrapper for direct toast calls without status file updates */
+export function toast(msg: string, variant: "info" | "success" | "warning" | "error" = "info", _title?: string): void {
+  if (toastFn) toastFn(msg, variant);
+}
