@@ -35,7 +35,6 @@ const s = tool.schema;
 
 type MemoryInputType = "decision" | "pattern" | "fact" | "preference" | "error";
 
-import { createToast } from "@four-bytes/opencode-plugin-lib";
 
 /**
  * Calculate ingest timeout dynamically based on file count.
@@ -53,7 +52,7 @@ function calculateIngestTimeout(fileCount: number): number {
 }
 
 /** Unified status updates — see src/status.ts */
-import { updateStatus, initStatus } from "./status";
+import { updateStatus, initStatus, toast } from "./status";
 
 
 
