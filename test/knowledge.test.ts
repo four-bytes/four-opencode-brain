@@ -769,7 +769,7 @@ describe("kbRecord — record occurrence", () => {
         kind: "problem",
         outcome: "fixed",
       }),
-    ).toThrow("entry not found");
+    ).toThrow("Entry not found: nonexistent-record-key (kind: problem)");
   });
 
   test("occurrence includes entry_key and kind reference", () => {
