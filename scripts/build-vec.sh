@@ -86,3 +86,4 @@ cp "$ROOT/node_modules/tree-sitter-typescript/tree-sitter-typescript.wasm" "$WAS
 cp "$ROOT/node_modules/tree-sitter-typescript/tree-sitter-tsx.wasm" "$WASM_DIR/" 2>/dev/null || echo "[build-vec] WARNING: tree-sitter-tsx.wasm not found"
 cp "$ROOT/node_modules/tree-sitter-javascript/tree-sitter-javascript.wasm" "$WASM_DIR/" 2>/dev/null || echo "[build-vec] WARNING: tree-sitter-javascript.wasm not found"
 cp "$ROOT/node_modules/tree-sitter-php/tree-sitter-php.wasm" "$WASM_DIR/" 2>/dev/null || echo "[build-vec] WARNING: tree-sitter-php.wasm not found"
+cp "$ROOT/node_modules/tree-sitter-rust/tree-sitter-rust.wasm" "$WASM_DIR/" 2>/dev/null || echo "[build-vec] WARNING: tree-sitter-rust.wasm not found"
