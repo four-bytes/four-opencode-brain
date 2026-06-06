@@ -12,18 +12,7 @@ import { log } from "../logger";
 /**
  * TUI toast notification — silently handles all errors.
  */
-function showToast(
-  client: PluginInput["client"],
-  message: string,
-  variant: "info" | "success" | "warning" | "error" = "info",
-  title?: string,
-): void {
-  try {
-    client.tui.showToast({ body: { message, variant, ...(title ? { title } : {}) } }).catch(() => {});
-  } catch {
-    // Never let UI errors break plugin operation
-  }
-}
+import { createToast } from "@four-bytes/opencode-plugin-lib";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -355,7 +344,7 @@ export async function onSessionIdle(
     });
 
     if (client && (decisionsSaved + consideredSaved + errorsSaved) > 0) {
-      showToast(client, `Auto-captured ${summaryText}`, "success", "Brain 🧠");
+      toast( `Auto-captured ${summaryText}`, "success", "Brain 🧠");
     }
   } finally {
     if (!db) conn.close();
