@@ -9,7 +9,8 @@ const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", 
 const POLL_MS = 200;
 
 interface BrainStatus {
-  phase?: "init" | "ingest" | "idle";
+  phase?: "init" | "ingest" | "idle" | "busy";
+  busy?: boolean;
   ingesting?: boolean;
   progress?: number;
   searching?: boolean;
@@ -17,6 +18,7 @@ interface BrainStatus {
   blocked?: boolean;
   current?: number;
   total?: number;
+  statusText?: string;
   version?: string;
 }
 
@@ -40,7 +42,12 @@ function BrainStatusBar(props: { centered?: boolean; api: TuiPluginApi }) {
       const data: BrainStatus = await file.json();
       setVersion(data.version ?? "");
 
-      if (data.scanning) {
+      if (data.phase === "busy") {
+        setIndicator(SPINNER[spin % SPINNER.length]);
+        setStatus(data.statusText ?? "working");
+        setFg(pulse % 2 === 0 ? theme().warning : theme().accent);
+        pulse++; spin++;
+      } else if (data.scanning) {
         setIndicator(SPINNER[spin % SPINNER.length]);
         setStatus("scanning files");
         setFg(pulse % 2 === 0 ? theme().warning : theme().accent);
