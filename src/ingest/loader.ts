@@ -32,6 +32,7 @@ const EXTENSION_LANG_MAP: Record<string, string> = {
   ".cjs": "javascript",
   ".jsx": "javascript",
   ".php": "php",
+  ".rs": "rust",
   ".md": "markdown",
   ".txt": "text",
 };

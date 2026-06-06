@@ -137,19 +137,36 @@ console.log(greet("World"));
   });
 
   test("ingests a PHP file and extracts symbols", async () => {
-    // File must be >200 lines to trigger symbol chunking (small files get document chunk)
+    // File must be >1024 tokens (~4096 chars) to trigger symbol chunking;
+    // each method is small enough to be a single symbol chunk
     const lines: string[] = [];
     lines.push("<?php");
     lines.push("");
     lines.push("class UserService {");
-    for (let i = 0; i < 50; i++) {
+    for (let i = 0; i < 15; i++) {
+      lines.push("  /**");
+      lines.push(`   * Method number ${i} — does important things.`);
+      lines.push("   * @param int $id The user identifier");
+      lines.push("   * @return ?User");
+      lines.push("   */");
       lines.push(`  public function method${i}(int $id): ?User {`);
-      lines.push("    return null;");
+      lines.push("    $result = $this->db->query('SELECT * FROM users WHERE id = ?', [$id]);");
+      lines.push("    if (!$result) {");
+      lines.push(`      throw new \\RuntimeException('User not found: ' . $id);`);
+      lines.push("    }");
+      lines.push("    $user = new User($result);");
+      lines.push("    $user->setLastAccessed(new \\DateTime());");
+      lines.push("    $this->entityManager->persist($user);");
+      lines.push("    $this->entityManager->flush();");
+      lines.push("    return $user;");
       lines.push("  }");
       lines.push("");
     }
     lines.push("}");
     lines.push("");
+    lines.push("/**");
+    lines.push(" * Helper function for user operations.");
+    lines.push(" */");
     lines.push("function helper(): void {");
     lines.push("  // do nothing");
     lines.push("}");
@@ -161,13 +178,13 @@ console.log(greet("World"));
     expect(result.filesIndexed).toBe(1);
     expect(result.errors.length).toBe(0);
 
-    // Should have symbol chunks
+    // Query all chunks (symbol + window) — large symbols get windowed
     const symbolChunks = db
-      .query<{ symbol: string; kind: string }, []>(
-        "SELECT symbol, kind FROM chunks WHERE document_id IN (SELECT id FROM documents WHERE path = ?) AND chunk_type = 'symbol' ORDER BY chunk_index",
+      .query<{ symbol: string; kind: string; chunk_type: string }, []>(
+        "SELECT symbol, kind, chunk_type FROM chunks WHERE document_id IN (SELECT id FROM documents WHERE path = ?) AND chunk_type IN ('symbol', 'window') ORDER BY chunk_index",
       )
       .all(filePath);
-    expect(symbolChunks.length).toBeGreaterThanOrEqual(3); // class + 50 methods + function
+    expect(symbolChunks.length).toBeGreaterThanOrEqual(3); // class + 15 methods + function
 
     const kinds = symbolChunks.map((c) => c.kind);
     expect(kinds).toContain("class");

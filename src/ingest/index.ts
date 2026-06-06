@@ -4,13 +4,14 @@
 // 1. Resolve path
 // 2. Walk files (recursive if dir, single if file)
 // 3. Detect language from extension
-// 4. Content-hash check against files table → skip unchanged
-// 5. Insert/update files table
-// 6. Insert documents table (dedup via BEFORE INSERT trigger)
-// 7. Extract symbols (code files only)
-// 8. Chunk content
-// 9. Insert chunks (dedup via BEFORE INSERT trigger)
-// 10. Wrap in SAVEPOINT for atomicity
+// 4. 10MB file size cap (skip oversized files, never read content → avoid OOM)
+// 5. Content-hash check against files table → skip unchanged
+// 6. Upsert files table (FK-preserving: ON CONFLICT DO UPDATE, keeps rowid)
+// 7. Insert documents table (dedup via BEFORE INSERT trigger)
+// 8. Extract symbols (code files only, 10s timeout)
+// 9. Chunk content (token-based)
+// 10. Insert chunks (dedup via BEFORE INSERT trigger, includes token_count)
+// 11. Wrap in SAVEPOINT for atomicity
 // ---------------------------------------------------------------------------
 
 import { stat } from "fs/promises";
@@ -46,8 +47,11 @@ export interface IngestOptions {
 }
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Constants
 // ---------------------------------------------------------------------------
+
+/** Maximum file size for ingestion (10 MB). Files larger than this are skipped. */
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
 
 // ---------------------------------------------------------------------------
 // Main pipeline
@@ -119,6 +123,22 @@ export async function ingestPath(
       const filePath = walked.path;
       const language = walked.language;
 
+      // ── 4. 10MB file size cap (before reading content) ───────────────
+      let fileStats;
+      try {
+        fileStats = await stat(filePath);
+      } catch (err) {
+        result.errors.push(`Failed to stat ${filePath}: ${String(err)}`);
+        continue;
+      }
+
+      if (fileStats.size > MAX_FILE_SIZE) {
+        result.errors.push(
+          `Skipped ${filePath}: file size ${fileStats.size} exceeds 10MB cap`,
+        );
+        continue;
+      }
+
       // Read file as raw buffer — binary-safe hashing (avoids encoding issues)
       let buf: ArrayBuffer;
       try {
@@ -131,7 +151,7 @@ export async function ingestPath(
       const contentHash = hashBuffer(new Uint8Array(buf));
       const size = buf.byteLength;
 
-      // ── 4. Content-hash check — skip if unchanged (unless reIndex) ──
+      // ── 5. Content-hash check — skip if unchanged (unless reIndex) ──
       if (!reIndex) {
         const existing = db
           .query<{ content_hash: string }, []>(
@@ -148,14 +168,20 @@ export async function ingestPath(
       // Convert buffer to text for document/chunk storage
       const content = new TextDecoder().decode(buf);
 
-      // ── 5. Insert/update files table ───────────────────────────────
+      // ── 6. Upsert files table (FK-preserving: keeps rowid for FTS5) ─
       const fileId = generateId();
       const mtime = Date.now();
 
       try {
         db.run(
-          `INSERT OR REPLACE INTO files (id, path, content_hash, mtime, lang, size, indexed_at)
-           VALUES (?, ?, ?, ?, ?, ?, datetime('now'))`,
+          `INSERT INTO files (id, path, content_hash, mtime, lang, size, indexed_at)
+           VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+           ON CONFLICT(path) DO UPDATE SET
+             content_hash = excluded.content_hash,
+             mtime         = excluded.mtime,
+             lang          = excluded.lang,
+             size          = excluded.size,
+             indexed_at    = datetime('now')`,
           [fileId, filePath, contentHash, mtime, language, size],
         );
       } catch (err) {
@@ -163,7 +189,7 @@ export async function ingestPath(
         continue;
       }
 
-      // ── 6. Insert documents table ──────────────────────────────────
+      // ── 7. Insert documents table ──────────────────────────────────
       const docId = generateId();
       const fileName = filePath.split("/").pop() ?? filePath;
       const filetype = filePath.split(".").pop() ?? "unknown";
@@ -190,10 +216,7 @@ export async function ingestPath(
         continue;
       }
 
-      // ── 7. Extract symbols (code files only) ───────────────────────
-      // (Chunker handles symbol extraction internally for code files)
-
-      // ── 8. Chunk content ────────────────────────────────────────────
+      // ── 8. Chunk content (symbol extraction happens inside chunker) ──
       const totalLines = content.split("\n").length;
 
       let chunks: Chunk[];
@@ -211,15 +234,15 @@ export async function ingestPath(
         continue;
       }
 
-      // ── 9. Insert chunks ────────────────────────────────────────────
+      // ── 9. Insert chunks (includes token_count) ───────────────────────
       const newChunkIds: string[] = [];
       for (const chunk of chunks) {
         try {
           db.run(
             `INSERT OR IGNORE INTO chunks
              (id, document_id, file_id, chunk_index, content, content_hash,
-              symbol, kind, start_line, end_line, chunk_type)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              symbol, kind, start_line, end_line, chunk_type, token_count)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               chunk.id,
               chunk.documentId,
@@ -232,6 +255,7 @@ export async function ingestPath(
               chunk.startLine,
               chunk.endLine,
               chunk.chunkType,
+              chunk.tokenCount,
             ],
           );
 

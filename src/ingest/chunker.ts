@@ -2,10 +2,12 @@
 // Hybrid content chunker for brain ingestion
 //
 // Granularities:
-//   - document  — whole file if <200 lines
-//   - symbol    — one chunk per extracted symbol (class/function/method)
-//   - window    — 50-line sliding windows with 25-line overlap for large files
+//   - document  — whole file if ≤ 1024 tokens
+//   - symbol    — one chunk per extracted symbol (class/function/method/etc.)
+//   - window    — 512-token sliding windows with 77-token overlap
 //   - heading   — markdown files split by headings
+//
+// Token estimation uses a rough 4 chars per token approximation.
 // ---------------------------------------------------------------------------
 
 import { hashContent } from "../schema";
@@ -16,9 +18,19 @@ import { extractSymbols, type ExtractedSymbol } from "./symbolExtractor";
 // Constants
 // ---------------------------------------------------------------------------
 
-const DOCUMENT_LINE_LIMIT = 200;
-const WINDOW_SIZE = 50;
-const WINDOW_OVERLAP = 25;
+const CHARS_PER_TOKEN = 4;
+const MAX_TOKENS_PER_CHUNK = 1024;
+const TOKEN_WINDOW = 512;
+const TOKEN_OVERLAP = 77; // ~15 %
+
+// ---------------------------------------------------------------------------
+// Token estimation
+// ---------------------------------------------------------------------------
+
+/** Rough token count estimator: 4 chars ≈ 1 token. */
+export function estimateTokens(text: string): number {
+  return Math.ceil(text.length / CHARS_PER_TOKEN);
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -40,11 +52,55 @@ export interface Chunk {
   chunkIndex: number;
   content: string;
   contentHash: string;
+  /** Qualified symbol path (e.g. "ClassName.methodName") or null */
   symbol: string | null;
   kind: string | null;
   startLine: number | null;
   endLine: number | null;
   chunkType: "document" | "symbol" | "window" | "heading";
+  tokenCount: number;
+}
+
+// ---------------------------------------------------------------------------
+// LineIndex: O(log n) line-at-offset lookups
+// ---------------------------------------------------------------------------
+
+class LineIndex {
+  private readonly lineStarts: number[];
+
+  constructor(private readonly text: string) {
+    this.lineStarts = [0];
+    for (let i = 0; i < text.length; i++) {
+      if (text[i] === "\n") {
+        this.lineStarts.push(i + 1);
+      }
+    }
+  }
+
+  /** Returns the 1-based line number at the given byte offset. */
+  lineAt(offset: number): number {
+    const pos = Math.min(offset, this.text.length);
+    let lo = 0;
+    let hi = this.lineStarts.length - 1;
+    while (lo < hi) {
+      const mid = Math.ceil((lo + hi) / 2);
+      if (this.lineStarts[mid] <= pos) lo = mid;
+      else hi = mid - 1;
+    }
+    return lo + 1; // 1-indexed
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Hash with session cache
+// ---------------------------------------------------------------------------
+
+function hashContentCached(content: string): string {
+  const cached = sessionCache.hashes.get(content);
+  if (cached) return cached;
+  const h = hashContent(content);
+  sessionCache.hashes.set(content, h);
+  return h;
 }
 
 // ---------------------------------------------------------------------------
@@ -85,6 +141,7 @@ function chunkByHeadings(
           startLine: headingLine,
           endLine: i,
           chunkType: "heading",
+          tokenCount: estimateTokens(sectionContent),
         });
       }
       currentStart = i;
@@ -108,6 +165,7 @@ function chunkByHeadings(
       startLine: headingLine,
       endLine: lines.length,
       chunkType: "heading",
+      tokenCount: estimateTokens(remaining),
     });
   }
 
@@ -115,40 +173,62 @@ function chunkByHeadings(
 }
 
 // ---------------------------------------------------------------------------
-// Window chunking
+// Window chunking (token-based)
 // ---------------------------------------------------------------------------
 
-function chunkByWindows(
-  content: string,
+/**
+ * Split `subContent` into fixed-size overlapping windows using token estimates.
+ *
+ * @param subContent   The text to split.
+ * @param documentId   Owning document ID.
+ * @param fileId       Owning file ID.
+ * @param startChunkIndex  First chunk index to assign.
+ * @param symbolName   Optional symbol name to inherit on every window.
+ * @param baseLine     Line offset (1-indexed) within the original file.
+ * @param qualifiedSym Optional qualified symbol path to inherit.
+ * @param symKind      Optional symbol kind to inherit.
+ */
+function windowChunks(
+  subContent: string,
   documentId: string,
   fileId: string,
+  startChunkIndex: number,
+  symbolName?: string,
+  baseLine = 1,
+  qualifiedSym?: string,
+  symKind?: string,
 ): Chunk[] {
-  const lines = content.split("\n");
   const chunks: Chunk[] = [];
-  const step = WINDOW_SIZE - WINDOW_OVERLAP;
+  const windowChars = TOKEN_WINDOW * CHARS_PER_TOKEN;
+  const overlapChars = TOKEN_OVERLAP * CHARS_PER_TOKEN;
+  const step = windowChars - overlapChars;
+  const len = subContent.length;
 
-  if (lines.length === 0) return [];
+  if (len === 0) return [];
 
-  for (let start = 0; start < lines.length; start += step) {
-    const end = Math.min(start + WINDOW_SIZE, lines.length);
-    const chunkText = lines.slice(start, end).join("\n");
+  const lineIdx = new LineIndex(subContent);
+
+  for (let offset = 0; offset < len; offset += step) {
+    const end = Math.min(offset + windowChars, len);
+    const chunkText = subContent.slice(offset, end);
     const h = hashContentCached(chunkText);
 
     chunks.push({
       id: crypto.randomUUID(),
       documentId,
       fileId,
-      chunkIndex: chunks.length,
+      chunkIndex: startChunkIndex + chunks.length,
       content: chunkText,
       contentHash: h,
-      symbol: null,
-      kind: null,
-      startLine: start + 1, // 1-indexed
-      endLine: end,
+      symbol: qualifiedSym ?? symbolName ?? null,
+      kind: symKind ?? null,
+      startLine: baseLine + lineIdx.lineAt(offset) - 1,
+      endLine: baseLine + lineIdx.lineAt(end) - 1,
       chunkType: "window",
+      tokenCount: estimateTokens(chunkText),
     });
 
-    if (end >= lines.length) break;
+    if (end >= len) break;
   }
 
   return chunks;
@@ -158,11 +238,22 @@ function chunkByWindows(
 // Symbol chunking
 // ---------------------------------------------------------------------------
 
+/**
+ * Build chunks from extracted symbols.
+ *
+ * For each symbol:
+ *   - ≤ MAX_TOKENS_PER_CHUNK tokens → single 'symbol' chunk
+ *   - > MAX_TOKENS_PER_CHUNK tokens → split into 'window' sub-chunks
+ *
+ * If the total file ≤ MAX_TOKENS_PER_CHUNK, a full-document chunk is also
+ * appended for top-level content (imports, etc.).
+ */
 function chunkBySymbols(
   content: string,
   symbols: ExtractedSymbol[],
   documentId: string,
   fileId: string,
+  totalTokenCount: number,
 ): Chunk[] {
   const sorted = [...symbols].sort(
     (a, b) => a.startLine - b.startLine || a.endLine - b.endLine,
@@ -173,20 +264,57 @@ function chunkBySymbols(
 
   for (const sym of sorted) {
     const symContent = lines.slice(sym.startLine - 1, sym.endLine).join("\n");
+    const symTokens = estimateTokens(symContent);
     const h = hashContentCached(symContent);
 
+    if (symTokens <= MAX_TOKENS_PER_CHUNK) {
+      chunks.push({
+        id: crypto.randomUUID(),
+        documentId,
+        fileId,
+        chunkIndex: chunks.length,
+        content: symContent,
+        contentHash: h,
+        symbol: sym.symbol ?? sym.name,
+        kind: sym.kind,
+        startLine: sym.startLine,
+        endLine: sym.endLine,
+        chunkType: "symbol",
+        tokenCount: symTokens,
+      });
+    } else {
+      // Large symbol → split into windows
+      const windows = windowChunks(
+        symContent,
+        documentId,
+        fileId,
+        chunks.length,
+        sym.name,
+        sym.startLine,
+        sym.symbol ?? sym.name,
+        sym.kind,
+      );
+      chunks.push(...windows);
+    }
+  }
+
+  // Add a catch-all document chunk for small files so top-level content
+  // (imports, standalone expressions) is still searchable.
+  if (totalTokenCount <= MAX_TOKENS_PER_CHUNK) {
+    const h = hashContentCached(content);
     chunks.push({
       id: crypto.randomUUID(),
       documentId,
       fileId,
       chunkIndex: chunks.length,
-      content: symContent,
+      content,
       contentHash: h,
-      symbol: sym.name,
-      kind: sym.kind,
-      startLine: sym.startLine,
-      endLine: sym.endLine,
-      chunkType: "symbol",
+      symbol: null,
+      kind: null,
+      startLine: 1,
+      endLine: lines.length,
+      chunkType: "document",
+      tokenCount: totalTokenCount,
     });
   }
 
@@ -194,15 +322,38 @@ function chunkBySymbols(
 }
 
 // ---------------------------------------------------------------------------
-// Hash with session cache
+// Fallback chunking (non-code files or when symbol extraction fails)
 // ---------------------------------------------------------------------------
 
-function hashContentCached(content: string): string {
-  const cached = sessionCache.hashes.get(content);
-  if (cached) return cached;
-  const h = hashContent(content);
-  sessionCache.hashes.set(content, h);
-  return h;
+function fallbackChunk(
+  content: string,
+  documentId: string,
+  fileId: string,
+  totalTokenCount: number,
+): Chunk[] {
+  // Content shorter than the window → single document chunk
+  if (totalTokenCount <= TOKEN_WINDOW) {
+    const h = hashContentCached(content);
+    return [
+      {
+        id: crypto.randomUUID(),
+        documentId,
+        fileId,
+        chunkIndex: 0,
+        content,
+        contentHash: h,
+        symbol: null,
+        kind: null,
+        startLine: 1,
+        endLine: content.split("\n").length,
+        chunkType: "document",
+        tokenCount: totalTokenCount,
+      },
+    ];
+  }
+
+  // Sliding-window fallback
+  return windowChunks(content, documentId, fileId, 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -210,18 +361,19 @@ function hashContentCached(content: string): string {
 // ---------------------------------------------------------------------------
 
 /**
- * Chunk content into searchable pieces.
+ * Chunk content into searchable pieces with token-based sizing.
  *
  * Strategy:
  * - **Markdown**: split by headings (##/###), fallback to windows
- * - **Code files with symbols**: one chunk per symbol
- * - **Small files (<200 lines)**: single document chunk
- * - **Large files without symbols**: 50-line sliding windows, 25-line overlap
+ * - **Code files with symbols**: one chunk per symbol (≤1024 tokens) or windowed
+ * - **Small files (≤1024 tokens)**: single document chunk
+ * - **Large files without symbols**: 512-token sliding windows, 77-token overlap
  */
 export async function chunkContent(input: ChunkInput): Promise<Chunk[]> {
   if (!input.content || input.content.length === 0) return [];
 
   const { content, documentId, fileId, filePath, language, totalLines } = input;
+  const totalTokenCount = estimateTokens(content);
 
   // Markdown: heading-based chunking
   if (language === "markdown" || language === "text") {
@@ -231,7 +383,7 @@ export async function chunkContent(input: ChunkInput): Promise<Chunk[]> {
   }
 
   // Small files: single document chunk
-  if (totalLines <= DOCUMENT_LINE_LIMIT) {
+  if (totalTokenCount <= MAX_TOKENS_PER_CHUNK) {
     const h = hashContentCached(content);
     return [
       {
@@ -246,16 +398,22 @@ export async function chunkContent(input: ChunkInput): Promise<Chunk[]> {
         startLine: 1,
         endLine: totalLines,
         chunkType: "document",
+        tokenCount: totalTokenCount,
       },
     ];
   }
 
   // Code files: try symbol extraction
-  if (language === "typescript" || language === "javascript" || language === "php") {
+  if (
+    language === "typescript" ||
+    language === "javascript" ||
+    language === "php" ||
+    language === "rust"
+  ) {
     try {
       const symbols = await extractSymbols(content, filePath);
       if (symbols.length > 0) {
-        return chunkBySymbols(content, symbols, documentId, fileId);
+        return chunkBySymbols(content, symbols, documentId, fileId, totalTokenCount);
       }
     } catch {
       // Fall through to window chunking
@@ -263,5 +421,5 @@ export async function chunkContent(input: ChunkInput): Promise<Chunk[]> {
   }
 
   // Large files without symbols: sliding windows
-  return chunkByWindows(content, documentId, fileId);
+  return fallbackChunk(content, documentId, fileId, totalTokenCount);
 }

@@ -1,14 +1,15 @@
 // ---------------------------------------------------------------------------
-// Simplified tree-sitter symbol extraction for TS/JS/PHP
+// Tree-sitter symbol extraction for TS/JS/PHP/Rust
 //
 // Ported from four-opencode-rag/src/ingest/symbolExtractor.ts.
-// Simplified: extracts only function/class/method names + line ranges.
-// No qualified symbol paths or dot-notation.
+// Extracts function/class/method/struct/trait/enum names with qualified
+// dot-notation paths, line ranges, and 10s timeout guard.
 // ---------------------------------------------------------------------------
 
-import { Parser, Language, Query } from "web-tree-sitter";
+import { Parser, Language, Query, type Node } from "web-tree-sitter";
 import { extname, join } from "path";
 import { existsSync } from "fs";
+import { log } from "../logger";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -16,9 +17,11 @@ import { existsSync } from "fs";
 
 export interface ExtractedSymbol {
   name: string;
-  kind: string; // "class" | "function" | "method" | "interface" | "enum" | "trait" | "constant"
+  kind: string; // "class" | "function" | "method" | "interface" | "enum" | "trait" | "constant" | "struct"
   startLine: number; // 1-indexed
   endLine: number; // 1-indexed
+  /** Qualified symbol path in dot-notation (e.g. "ClassName.methodName") */
+  symbol: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -74,10 +77,21 @@ const LANG_CONFIGS: Record<string, LangConfig> = {
       (trait_declaration name: (name) @trait)
     `,
   },
+  rust: {
+    wasmFile: "tree-sitter-rust.wasm",
+    npmPackage: "tree-sitter-rust",
+    query: `
+      (struct_item name: (type_identifier) @struct)
+      (function_item name: (identifier) @function)
+      (enum_item name: (type_identifier) @enum)
+      (trait_item name: (type_identifier) @trait)
+      (impl_item) @impl
+    `,
+  },
 };
 
 // ---------------------------------------------------------------------------
-// WASM resolution
+// Extension → language mapping
 // ---------------------------------------------------------------------------
 
 const EXTENSION_LANG_MAP: Record<string, string> = {
@@ -88,12 +102,17 @@ const EXTENSION_LANG_MAP: Record<string, string> = {
   ".cjs": "javascript",
   ".jsx": "javascript",
   ".php": "php",
+  ".rs": "rust",
 };
 
 function getLanguageName(filePath: string): string | null {
   const ext = extname(filePath).toLowerCase();
   return EXTENSION_LANG_MAP[ext] ?? null;
 }
+
+// ---------------------------------------------------------------------------
+// WASM resolution
+// ---------------------------------------------------------------------------
 
 function resolveWasmPath(filename: string, npmPackage: string): string {
   // 1. Check next to the built dist file (import.meta.dir)
@@ -118,8 +137,135 @@ function resolveWasmPath(filename: string, npmPackage: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Qualified Symbol Path Builder
+// ---------------------------------------------------------------------------
+
+/**
+ * Walk up the tree-sitter AST to build a qualified symbol path.
+ *
+ * For TypeScript:   "ClassName.methodName" or standalone "functionName"
+ * For JavaScript:   same as TypeScript
+ * For PHP:          "Namespace\ClassName.methodName" or "Namespace\functionName"
+ * For Rust:         "StructName.methodName" or standalone "functionName"
+ * For other langs:  best-effort, returns just the symbol name if no parent scope found.
+ *
+ * Handles both block-form namespaces (parent in AST) and semicolon-form
+ * namespaces (sibling under `program`) for PHP.
+ */
+function buildQualifiedSymbolPath(node: Node, language: string): string {
+  const parts: string[] = [];
+  const isTsLike = language === "typescript" || language === "tsx" || language === "javascript";
+  const isPhp = language === "php";
+  const isRust = language === "rust";
+  let foundNamespace = false;
+
+  /**
+   * Check whether `candidate` represents the same source position as `node`.
+   * Used to avoid self-referencing when the captured name node IS the name
+   * child of an enclosing declaration (e.g. "class Foo {}" — the capture IS Foo).
+   */
+  function isSelfRef(candidate: Node): boolean {
+    return (
+      candidate.startPosition.row === node.startPosition.row &&
+      candidate.startPosition.column === node.startPosition.column &&
+      candidate.endPosition.row === node.endPosition.row &&
+      candidate.endPosition.column === node.endPosition.column
+    );
+  }
+
+  // ── Step 1: Walk up to find enclosing scopes ─────────────────────────────
+  let current: Node | null = node.parent;
+  while (current && current.type !== "program" && current.type !== "source_file") {
+    const type = current.type;
+
+    // TS/JS scope containers — no nesting beyond class/interface/enum
+    if (isTsLike) {
+      if (
+        type === "class_declaration" ||
+        type === "interface_declaration" ||
+        type === "enum_declaration" ||
+        type === "module_declaration"
+      ) {
+        const nameChild = current.childForFieldName("name");
+        if (nameChild && !isSelfRef(nameChild)) parts.unshift(nameChild.text.trim());
+        break;
+      }
+    }
+
+    // PHP scope containers — can nest (namespace → class → method)
+    if (isPhp) {
+      if (
+        type === "class_declaration" ||
+        type === "trait_declaration" ||
+        type === "interface_declaration" ||
+        type === "enum_declaration"
+      ) {
+        const nameChild = current.childForFieldName("name");
+        if (nameChild && !isSelfRef(nameChild)) parts.unshift(nameChild.text.trim());
+      }
+      if (type === "namespace_definition") {
+        const nameChild = current.childForFieldName("name");
+        if (nameChild) {
+          parts.unshift(nameChild.text.trim());
+          foundNamespace = true;
+        }
+      }
+    }
+
+    // Rust scope containers — walk up through impl blocks, modules
+    if (isRust) {
+      if (
+        type === "struct_item" ||
+        type === "enum_item" ||
+        type === "trait_item"
+      ) {
+        const nameChild = current.childForFieldName("name");
+        if (nameChild && !isSelfRef(nameChild)) parts.unshift(nameChild.text.trim());
+        break;
+      }
+      if (type === "impl_item") {
+        // impl block: get type being implemented
+        const typeChild = current.childForFieldName("type");
+        if (typeChild) parts.unshift(typeChild.text.trim());
+        break;
+      }
+      if (type === "mod_item") {
+        const nameChild = current.childForFieldName("name");
+        if (nameChild) parts.unshift(nameChild.text.trim());
+      }
+    }
+
+    current = current.parent;
+  }
+
+  // ── Step 2 (PHP only): implicit namespace via semicolon form ─────────────
+  if (isPhp && !foundNamespace) {
+    let root: Node | null = node;
+    while (root && root.type !== "program" && root.type !== "source_file") root = root.parent;
+    if (root) {
+      const captureLine = node.startPosition.row;
+      let nsName: string | null = null;
+      for (const child of root.children) {
+        if (child.type === "namespace_definition" && child.endPosition.row < captureLine) {
+          const nameChild = child.childForFieldName("name");
+          if (nameChild) nsName = nameChild.text.trim();
+        }
+      }
+      if (nsName) parts.unshift(nsName);
+    }
+  }
+
+  // ── Step 3: Append the symbol's own name ─────────────────────────────────
+  parts.push(node.text.trim());
+
+  return parts.join(".");
+}
+
+// ---------------------------------------------------------------------------
 // Singleton extractor
 // ---------------------------------------------------------------------------
+
+const EXTRACTION_TIMEOUT_MS = 10_000;
 
 class SymbolExtractor {
   private static instance: SymbolExtractor;
@@ -138,12 +284,10 @@ class SymbolExtractor {
     if (this.initialized) return;
     await Parser.init({
       locateFile: (name: string) => {
-        // web-tree-sitter.wasm is always from web-tree-sitter package
         const pkg = "web-tree-sitter";
         const cwd = process.cwd();
         const nmPath = join(cwd, "node_modules", pkg, name);
         if (existsSync(nmPath)) return nmPath;
-        // fallback to import.meta.dir
         return join(import.meta.dir ?? ".", name);
       },
     });
@@ -176,24 +320,63 @@ class SymbolExtractor {
       const seen = new Set<string>();
 
       for (const capture of captures) {
+        // Skip impl_item captures for Rust — those are containers, not symbols
+        if (langName === "rust" && capture.name === "impl") continue;
+
         const name = capture.node.text.trim();
-        if (!name || name.length === 0 || seen.has(name)) continue;
-        seen.add(name);
+        if (!name || name.length === 0) continue;
 
         // Walk up to parent declaration for the full range
         const declNode = capture.node.parent ?? capture.node;
+
+        // Dedup by name+startLine (allows same-named symbols in different scopes, e.g. Rust impl blocks)
+        const dedupKey = `${name}@${declNode.startPosition.row}`;
+        if (seen.has(dedupKey)) continue;
+        seen.add(dedupKey);
+
+        const qualifiedPath = buildQualifiedSymbolPath(capture.node, langName);
 
         symbols.push({
           name,
           kind: capture.name,
           startLine: declNode.startPosition.row + 1, // 1-indexed
           endLine: declNode.endPosition.row + 1,
+          symbol: qualifiedPath,
         });
       }
 
       return symbols;
     } catch (err) {
       // Silently return empty on parse failure
+      return [];
+    }
+  }
+
+  /**
+   * Extract symbols with a 10-second timeout guard.
+   * On timeout, returns empty array and logs a warning.
+   */
+  async extractSymbolsWithTimeout(
+    content: string,
+    filePath: string,
+  ): Promise<ExtractedSymbol[]> {
+    const abortController = new AbortController();
+
+    try {
+      const result = await Promise.race([
+        this.extractSymbols(content, filePath),
+        new Promise<never>((_, reject) => {
+          const timer = setTimeout(() => {
+            abortController.abort();
+            reject(new Error("Tree-sitter symbol extraction timed out"));
+          }, EXTRACTION_TIMEOUT_MS);
+          // Allow GC of timer if extraction completes first
+          if (abortController.signal.aborted) clearTimeout(timer);
+        }),
+      ]);
+      return result;
+    } catch (err) {
+      log("warn", "symbol-extractor", `Timeout/error for ${filePath}: ${String(err)}`);
       return [];
     }
   }
@@ -225,13 +408,13 @@ class SymbolExtractor {
 // ---------------------------------------------------------------------------
 
 /**
- * Extract symbols from source code content using tree-sitter.
- * Returns simplified symbol info (name, kind, start/end lines).
- * Gracefully returns empty array on parse failure or unsupported language.
+ * Extract symbols from source code content using tree-sitter with a 10s timeout.
+ * Returns simplified symbol info (name, kind, start/end lines, qualified path).
+ * Gracefully returns empty array on timeout, parse failure, or unsupported language.
  */
 export async function extractSymbols(
   content: string,
   filePath: string,
 ): Promise<ExtractedSymbol[]> {
-  return SymbolExtractor.getInstance().extractSymbols(content, filePath);
+  return SymbolExtractor.getInstance().extractSymbolsWithTimeout(content, filePath);
 }
