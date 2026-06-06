@@ -200,7 +200,7 @@ export function kbAdd(db: Database, input: KbAddInput): KbAddResult {
         input.kind,
         input.title,
         input.description ?? null,
-        input.entity_type ?? null,
+        input.entity_type ?? "problem",
         input.root_cause ?? null,
         input.canonical_solution ?? null,
         input.tags ?? null,
@@ -261,7 +261,7 @@ export function kbAdd(db: Database, input: KbAddInput): KbAddResult {
     [
       input.title,
       input.description ?? null,
-      input.entity_type ?? null,
+      input.entity_type ?? "problem",
       input.root_cause ?? null,
       input.canonical_solution ?? null,
       input.tags ?? null,
@@ -439,4 +439,85 @@ export function kbReview(db: Database, input: KbReviewInput): KbEntryFull {
   );
 
   return kbGet(db, input.entry_key, input.kind)!;
+}
+
+// ---------------------------------------------------------------------------
+// kbSearch — FTS5 search knowledge entries with optional filters
+// ---------------------------------------------------------------------------
+
+export interface KbSearchOptions {
+  query: string;
+  entity_type?: string;
+  kind?: string;
+  confidence_min?: number;
+  review_state?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface KbSearchResult {
+  entry_key: string;
+  kind: string;
+  title: string;
+  description: string | null;
+  entity_type: string;
+  root_cause: string | null;
+  canonical_solution: string | null;
+  tags: string | null;
+  confidence: number;
+  review_state: string;
+  rank: number;
+}
+
+export function kbSearch(
+  db: Database,
+  options: KbSearchOptions,
+): KbSearchResult[] {
+  if (!options.query || options.query.trim().length === 0) {
+    return [];
+  }
+
+  let sql = `
+    SELECT k.entry_key, k.kind, k.title, k.description, k.entity_type,
+           k.root_cause, k.canonical_solution, k.tags, k.confidence, k.review_state,
+           rank
+    FROM entries_fts f
+    JOIN knowledge_entries k ON k.rowid = f.rowid
+    WHERE entries_fts MATCH ?
+  `;
+  const params: unknown[] = [options.query];
+
+  if (options.entity_type) {
+    sql += " AND k.entity_type = ?";
+    params.push(options.entity_type);
+  }
+  if (options.kind) {
+    sql += " AND k.kind = ?";
+    params.push(options.kind);
+  }
+  if (options.confidence_min !== undefined) {
+    sql += " AND k.confidence >= ?";
+    params.push(options.confidence_min);
+  }
+  if (options.review_state) {
+    sql += " AND k.review_state = ?";
+    params.push(options.review_state);
+  }
+
+  sql += " ORDER BY rank";
+
+  if (options.limit !== undefined) {
+    sql += " LIMIT ?";
+    params.push(options.limit);
+  }
+  if (options.offset !== undefined) {
+    sql += " OFFSET ?";
+    params.push(options.offset);
+  }
+
+  try {
+    return db.query<KbSearchResult, unknown[]>(sql).all(...params);
+  } catch {
+    return [];
+  }
 }

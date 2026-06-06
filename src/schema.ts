@@ -134,7 +134,7 @@ export function createSchema(db: Database): void {
       kind              TEXT NOT NULL,
       title             TEXT NOT NULL,
       description       TEXT,
-      entity_type       TEXT,
+      entity_type       TEXT NOT NULL DEFAULT 'problem' CHECK(entity_type IN ('problem','pattern','convention','decision','observation','fix','summary')),
       root_cause        TEXT,
       canonical_solution TEXT,
       tags              TEXT,
@@ -146,6 +146,9 @@ export function createSchema(db: Database): void {
       PRIMARY KEY (entry_key, kind)
     )
   `);
+
+  // ---- Migration: add entity_type CHECK for existing databases -----------
+  migrateEntityTypeCheck(db);
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS knowledge_occurrences (
@@ -334,4 +337,66 @@ export function createSchema(db: Database): void {
       );
     END
   `);
+}
+
+// ---------------------------------------------------------------------------
+// Migration: add entity_type CHECK constraint for existing databases
+// ---------------------------------------------------------------------------
+
+/**
+ * For existing databases where the `knowledge_entries` table was created
+ * without the entity_type CHECK constraint, this migration:
+ *
+ * 1. Updates any NULL entity_type values to 'problem'
+ * 2. Adds BEFORE INSERT and BEFORE UPDATE triggers to enforce the
+ *    valid entity_type values (since SQLite does not support
+ *    ALTER TABLE ... ADD CHECK)
+ */
+function migrateEntityTypeCheck(db: Database): void {
+  try {
+    // Check if the table already has the CHECK constraint by inspecting its DDL
+    const row = db
+      .query<{ sql: string }, []>(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='knowledge_entries'",
+      )
+      .get();
+
+    if (row && row.sql && row.sql.includes("CHECK(entity_type IN")) {
+      // Constraint already exists — nothing to migrate
+      return;
+    }
+
+    // Migrate existing NULL entity_types to 'problem'
+    db.run(
+      "UPDATE knowledge_entries SET entity_type = 'problem' WHERE entity_type IS NULL",
+    );
+
+    // Add BEFORE INSERT trigger for entity_type validation
+    db.exec(`
+      CREATE TRIGGER IF NOT EXISTS knowledge_entries_check_entity_type_bi
+      BEFORE INSERT ON knowledge_entries
+      BEGIN
+        SELECT CASE
+          WHEN NEW.entity_type NOT IN ('problem','pattern','convention','decision','observation','fix','summary')
+          THEN RAISE(ABORT, 'Invalid entity_type: ' || NEW.entity_type)
+        END;
+      END
+    `);
+
+    // Add BEFORE UPDATE trigger for entity_type validation
+    db.exec(`
+      CREATE TRIGGER IF NOT EXISTS knowledge_entries_check_entity_type_bu
+      BEFORE UPDATE ON knowledge_entries
+      BEGIN
+        SELECT CASE
+          WHEN NEW.entity_type NOT IN ('problem','pattern','convention','decision','observation','fix','summary')
+          THEN RAISE(ABORT, 'Invalid entity_type: ' || NEW.entity_type)
+        END;
+      END
+    `);
+
+    log("info", "schema", "Applied entity_type CHECK migration via triggers");
+  } catch (err) {
+    log("error", "schema", `entity_type CHECK migration failed: ${String(err)}`);
+  }
 }
