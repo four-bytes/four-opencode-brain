@@ -77,7 +77,7 @@ export default (async (input: PluginInput) => {
       let fileCount = 0;
       try {
         const walked = await resolveFiles(directory, true);
-        fileCount = walked.length;
+        fileCount = walked.files.length;
         showToast(client, `Indexing ${fileCount} files...`, "info", "Brain");
       } catch {
         showToast(client, `Indexing ${project?.name ?? "project"}…`, "info", "Brain");
