@@ -439,7 +439,32 @@ export default (async (input: PluginInput) => {
     },
     "event": async (eventInput) => {
       if (eventInput.event.type === "session.idle") {
-        await onSessionIdle(input);
+        const { sessionID } = eventInput.event.properties;
+        let text = "";
+        try {
+          const result = await input.client.session.messages({
+            path: { id: sessionID },
+            query: { limit: 10, directory },
+          });
+          if (result.data) {
+            const texts: string[] = [];
+            for (const msg of result.data) {
+              for (const part of msg.parts) {
+                if (part.type === "text") {
+                  texts.push(part.text);
+                }
+              }
+            }
+            text = texts.join("\n");
+          }
+        } catch (err) {
+          log("debug", "autocapture", "Failed to fetch session messages", { error: String(err) });
+        }
+        if (text) {
+          await onSessionIdle(input, text);
+        } else {
+          log("debug", "autocapture", "No session text to scan for decisions", { sessionID });
+        }
       }
     },
     tool: {
