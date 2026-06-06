@@ -20,7 +20,7 @@ import type { Database } from "bun:sqlite";
 
 import { generateId, hashBuffer, hashContent } from "../schema";
 import { log } from "../logger";
-import { resolveFiles, detectLanguage } from "./loader";
+import { resolveFiles, detectLanguage, isBinaryContent, type WalkResult } from "./loader";
 import { chunkContent, type Chunk } from "./chunker";
 import { extractSymbols } from "./symbolExtractor";
 import { embedChunks } from "./embed";
@@ -34,6 +34,7 @@ export interface IngestResult {
   filesFound: number;
   filesSkipped: number; // hash match — already indexed
   filesIndexed: number; // new or updated
+  unsupported: number;  // excluded at walk time — unsupported extension
   chunksCreated: number;
   chunksEmbedded: number; // chunks successfully embedded into vec0
   documentsCreated: number;
@@ -99,6 +100,7 @@ export async function ingestPath(
     filesFound: 0,
     filesSkipped: 0,
     filesIndexed: 0,
+    unsupported: 0,
     chunksCreated: 0,
     chunksEmbedded: 0,
     documentsCreated: 0,
@@ -122,16 +124,18 @@ export async function ingestPath(
   }
 
   // ── 2. Walk files ───────────────────────────────────────────────────
-  let walkedFiles: { path: string; language: string | null }[];
+  let walkResult: WalkResult;
   try {
-    walkedFiles = await resolveFiles(absolutePath, recursive);
+    walkResult = await resolveFiles(absolutePath, recursive);
   } catch (err) {
     result.errors.push(`Failed to walk path: ${String(err)}`);
     result.durationMs = Date.now() - startTime;
     return result;
   }
 
+  const walkedFiles = walkResult.files;
   result.filesFound = walkedFiles.length;
+  result.unsupported = walkResult.skippedExt;
 
   emitProgressEvent("ingest.start", {
     totalFiles: walkedFiles.length,
@@ -181,6 +185,12 @@ export async function ingestPath(
         buf = await Bun.file(filePath).arrayBuffer();
       } catch (err) {
         result.errors.push(`Failed to read ${filePath}: ${String(err)}`);
+        continue;
+      }
+
+      // Binary content guard: skip files with null bytes (safety net for misnamed binaries)
+      if (isBinaryContent(new Uint8Array(buf))) {
+        log("debug", "ingest", `Skipped binary content: ${filePath}`);
         continue;
       }
 
