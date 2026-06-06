@@ -180,7 +180,7 @@ export default (async (input: PluginInput) => {
     execute: async (args) => {
       const db = initBrainDatabase();
       try {
-        const results = brainSearch(db, args.query, {
+        const results = await brainSearch(db, args.query, {
           filters: args.filters,
           limit: args.limit ?? 20,
           contentType: (args.contentType ?? "all") as
@@ -219,7 +219,7 @@ export default (async (input: PluginInput) => {
         let embedded = 0;
         if (totalChunks > 0 && loadVec0(db)) {
           const chunkIds = chunkRows.map((r) => r.id);
-          embedded = embedChunks(db, chunkIds);
+          embedded = await embedChunks(db, chunkIds);
         }
 
         return JSON.stringify({

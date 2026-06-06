@@ -87,3 +87,8 @@ cp "$ROOT/node_modules/tree-sitter-typescript/tree-sitter-tsx.wasm" "$WASM_DIR/"
 cp "$ROOT/node_modules/tree-sitter-javascript/tree-sitter-javascript.wasm" "$WASM_DIR/" 2>/dev/null || echo "[build-vec] WARNING: tree-sitter-javascript.wasm not found"
 cp "$ROOT/node_modules/tree-sitter-php/tree-sitter-php.wasm" "$WASM_DIR/" 2>/dev/null || echo "[build-vec] WARNING: tree-sitter-php.wasm not found"
 cp "$ROOT/node_modules/tree-sitter-rust/tree-sitter-rust.wasm" "$WASM_DIR/" 2>/dev/null || echo "[build-vec] WARNING: tree-sitter-rust.wasm not found"
+
+# ---- Note: Embedding model (GGUF) is downloaded at runtime ----
+# The real embedding model (all-MiniLM-L6-v2.Q8_0.gguf, ~25 MB) is downloaded
+# on first use to ~/.cache/four-opencode-brain/models/ by src/embed/modelDownloader.ts.
+# No build-time model bundling required.

@@ -7,6 +7,7 @@ import { Database } from "bun:sqlite";
 import { sessionCache } from "../cache";
 import { loadVec0 } from "../embed/extensionLoader";
 import { generateEmbedding, float32ToBlob } from "../ingest/embed";
+import { EmbeddingService } from "../embed/embeddingService";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -170,8 +171,6 @@ function ftsSearchMemories(
   `;
   const params: unknown[] = [query];
 
-  // Tag-based filtering could be added here
-
   sql += " ORDER BY rank LIMIT ?";
   params.push(maxResults);
 
@@ -262,20 +261,30 @@ function hasVec0Table(db: Database): boolean {
   }
 }
 
-function searchVec0(
+/**
+ * Vec0 KNN search using either real embeddings (via EmbeddingService)
+ * or hash-based pseudo-embeddings as fallback.
+ */
+async function searchVec0(
   db: Database,
   query: string,
   maxResults: number,
-): SearchResult[] {
+): Promise<SearchResult[]> {
   // Ensure vec0 extension is loaded
   if (!loadVec0(db)) return [];
 
   try {
-    // Generate query embedding
-    const queryVec = generateEmbedding(query);
+    const embService = EmbeddingService.getInstance();
+    let queryVec: Float32Array;
+
+    if (embService.isAvailable()) {
+      queryVec = await embService.embed(query);
+    } else {
+      queryVec = generateEmbedding(query);
+    }
+
     const queryBlob = float32ToBlob(queryVec);
 
-    // KNN search via vec0 virtual table
     const rows = db
       .query<{ chunk_id: string; distance: number }, [Uint8Array, number]>(
         `SELECT chunk_id, distance
@@ -290,11 +299,10 @@ function searchVec0(
       id: row.chunk_id,
       title: `vec0:${row.chunk_id.slice(0, 8)}`,
       excerpt: `[vec0 chunk] distance=${row.distance.toFixed(4)}`,
-      score: Math.max(0, 1 - row.distance), // convert distance to similarity score
+      score: Math.max(0, 1 - row.distance),
       content_type: "chunk" as const,
     }));
   } catch {
-    // vec0 query failed — gracefully degrade to empty results
     return [];
   }
 }
@@ -351,7 +359,6 @@ function searchChunksFallback(
     }>;
 
     return rows.map((r) => {
-      // Create a brief excerpt from the chunk content
       const excerpt = r.content.length > 80
         ? r.content.slice(0, 80) + "..."
         : r.content;
@@ -407,12 +414,13 @@ function rrfFusion(lists: SearchResult[][], k: number = 60): SearchResult[] {
 // ---------------------------------------------------------------------------
 
 /**
- * Unified FTS5 search across documents, memories, and knowledge entries.
+ * Unified FTS5 + vec0 search across documents, memories, and knowledge entries.
  *
  * - Runs FTS5 MATCH queries on all three content types
  * - Applies inline filters (language:, path:, entity_type:, etc.)
- * - Optionally runs vec0 vector search if the chunks_vec table exists
- * - Combines results via RRF fusion when vec0 is available
+ * - Runs vec0 vector search (real embeddings via EmbeddingService when available,
+ *   hash-based pseudo-embeddings as fallback) if chunks_vec table exists
+ * - Combines results via RRF fusion when vec0 results are available
  * - Strips `<mark>` tags from excerpts
  * - Results are cached per session via LRU cache
  *
@@ -421,11 +429,11 @@ function rrfFusion(lists: SearchResult[][], k: number = 60): SearchResult[] {
  * @param options SearchOptions
  * @returns     Array of SearchResult (never null, empty array if no results)
  */
-export function brainSearch(
+export async function brainSearch(
   db: Database,
   query: string,
   options?: SearchOptions,
-): SearchResult[] {
+): Promise<SearchResult[]> {
   // Empty query guard
   if (!query || query.trim().length === 0) {
     return [];
@@ -452,11 +460,11 @@ export function brainSearch(
     ftsLists.push(ftsSearchKnowledge(db, query, filters, limit));
   }
 
-  // Vec0 chunk search (optional); fall back to SQL LIKE if vec0 unavailable
+  // Vec0 chunk search (async — uses real embeddings when available)
   let chunkResults: SearchResult[] = [];
   if (ct === "all" || ct === "chunk") {
     if (hasVec0Table(db) && loadVec0(db)) {
-      chunkResults = searchVec0(db, query, limit);
+      chunkResults = await searchVec0(db, query, limit);
     } else {
       chunkResults = searchChunksFallback(db, query, limit, filters);
     }

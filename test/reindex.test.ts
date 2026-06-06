@@ -53,7 +53,7 @@ describe("brain_reindex — tool definition", () => {
 // ---------------------------------------------------------------------------
 
 describe("brain_reindex — vector index rebuild logic", () => {
-  test("drops and recreates chunks_vec table, search still works", () => {
+  test("drops and recreates chunks_vec table, search still works", async () => {
     // Insert test document
     const docId = generateId();
     db.run(
@@ -62,7 +62,7 @@ describe("brain_reindex — vector index rebuild logic", () => {
     );
 
     // Verify search works before reindex
-    const before = brainSearch(db, "reindex", {
+    const before = await brainSearch(db, "reindex", {
       contentType: "document",
       limit: 10,
     });
@@ -81,7 +81,7 @@ describe("brain_reindex — vector index rebuild logic", () => {
     expect(tableExists("chunks_vec")).toBe(true);
 
     // Verify search still works after reindex
-    const after = brainSearch(db, "reindex", {
+    const after = await brainSearch(db, "reindex", {
       contentType: "document",
       limit: 10,
     });

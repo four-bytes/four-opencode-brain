@@ -1,10 +1,11 @@
 // ---------------------------------------------------------------------------
-// Embedding pipeline for vec0 — hash-based cache + placeholder embeddings
+// Embedding pipeline for vec0 — real embeddings via node-llama-cpp
+// with hash-based pseudo-embedding fallback when model unavailable.
 //
 // - embedChunks() processes all chunks by ID, generates embeddings,
 //   caches by content hash, and inserts into chunks_vec
 // - generateEmbedding() produces a deterministic 384-dim vector from
-//   content hash (placeholder until a real embedding model is added)
+//   content hash (fallback when real embedding model is unavailable)
 // - float32ToBlob() serializes Float32Array to Uint8Array for SQLite
 // ---------------------------------------------------------------------------
 
@@ -12,6 +13,7 @@ import type { Database } from "bun:sqlite";
 import { hashContent } from "../schema";
 import { sessionCache } from "../cache";
 import { log } from "../logger";
+import { EmbeddingService } from "../embed/embeddingService";
 
 // ---------------------------------------------------------------------------
 // Float32Array ↔ BLOB serialization
@@ -33,17 +35,16 @@ export function blobToFloat32(blob: Uint8Array): Float32Array {
 }
 
 // ---------------------------------------------------------------------------
-// Deterministic pseudo-embedding from content hash
+// Deterministic pseudo-embedding from content hash (FALLBACK)
 // ---------------------------------------------------------------------------
 
 /**
  * Generate a deterministic 384-dim Float32Array from text content.
  *
- * This is a PLACEHOLDER — it uses the SHA-256 hash of the content to produce
+ * This is a FALLBACK — it uses the SHA-256 hash of the content to produce
  * a pseudo-random but deterministic vector in range [-1, 1].
  *
- * In a follow-up, this will call an actual embedding model (e.g. nomic-embed-text).
- * For now, the vec0 infrastructure works end-to-end for testing and development.
+ * Used only when the real embedding model (node-llama-cpp) is unavailable.
  */
 export function generateEmbedding(text: string): Float32Array {
   const vec = new Float32Array(384);
@@ -76,11 +77,14 @@ export function generateEmbedding(text: string): Float32Array {
  * Uses sessionCache.embeddings for hash-based dedup: if the same content hash
  * has already been embedded in this session, the cached vector is reused.
  *
+ * Prefers real embeddings via EmbeddingService (node-llama-cpp).
+ * Falls back to hash-based pseudo-embeddings when model unavailable.
+ *
  * @param db       Open brain database handle
  * @param chunkIds Array of chunk UUIDs to embed
  * @returns        Number of chunks successfully embedded
  */
-export function embedChunks(db: Database, chunkIds: string[]): number {
+export async function embedChunks(db: Database, chunkIds: string[]): Promise<number> {
   if (chunkIds.length === 0) return 0;
 
   // Verify the chunks_vec table exists before proceeding
@@ -91,9 +95,27 @@ export function embedChunks(db: Database, chunkIds: string[]): number {
     .get()!;
   if (tableExists.c === 0) return 0;
 
+  // ── Try to initialize real embedding model ────────────────────────────
+  const embService = EmbeddingService.getInstance();
+  let useRealEmbeddings = false;
+  if (!embService.isAvailable() && !embService.getDimensions()) {
+    try {
+      await embService.initialize();
+      useRealEmbeddings = embService.isAvailable();
+    } catch {
+      useRealEmbeddings = false;
+    }
+  } else {
+    useRealEmbeddings = embService.isAvailable();
+  }
+
+  if (!useRealEmbeddings) {
+    log("warn", "embed", "Real embedding model unavailable — using hash-based pseudo-embeddings");
+  }
+
   let embedded = 0;
 
-  // Lazy-prepared statements (within function scope for table existence check)
+  // Lazy-prepared statements
   const getStmt = db.query<{ content: string; content_hash: string }, [string]>(
     "SELECT content, content_hash FROM chunks WHERE id = ?",
   );
@@ -112,7 +134,11 @@ export function embedChunks(db: Database, chunkIds: string[]): number {
       // Check session cache first
       let vec = sessionCache.embeddings.get(content_hash);
       if (!vec) {
-        vec = generateEmbedding(content);
+        if (useRealEmbeddings) {
+          vec = await embService.embed(content);
+        } else {
+          vec = generateEmbedding(content);
+        }
         sessionCache.embeddings.set(content_hash, vec);
       }
 
