@@ -9,6 +9,22 @@ import { memoryAdd } from "../memory/store";
 import { kbAdd, kbReview, deriveEntryKey } from "../knowledge/store";
 import { log } from "../logger";
 
+/**
+ * TUI toast notification — silently handles all errors.
+ */
+function showToast(
+  client: PluginInput["client"],
+  message: string,
+  variant: "info" | "success" | "warning" | "error" = "info",
+  title?: string,
+): void {
+  try {
+    client.tui.showToast({ body: { message, variant, ...(title ? { title } : {}) } }).catch(() => {});
+  } catch {
+    // Never let UI errors break plugin operation
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -107,11 +123,11 @@ export async function onChatMessage(
   _input: PluginInput,
   message: { role: string; content: string },
   db?: Database,
-): Promise<void> {
-  if (message.role !== "user" || !message.content) return;
+): Promise<boolean> {
+  if (message.role !== "user" || !message.content) return false;
 
   const extracted = extractTriggerContent(message.content);
-  if (!extracted) return;
+  if (!extracted) return false;
 
   const title = deriveTitle(extracted);
   const conn = db ?? openDatabase();
@@ -119,6 +135,7 @@ export async function onChatMessage(
     createSchema(conn);
     memoryAdd(conn, { type: "fact", title, content: extracted });
     log("info", "autocapture", "auto-captured memory", { title });
+    return true;
   } finally {
     if (!db) conn.close();
   }
@@ -143,6 +160,7 @@ export async function onSessionIdle(
   _input: PluginInput,
   text?: string,
   db?: Database,
+  client?: PluginInput["client"],
 ): Promise<void> {
   if (!text) return;
 
@@ -194,6 +212,11 @@ export async function onSessionIdle(
     }
 
     log("debug", "autocapture", "Auto-capture complete", { decisionsFound: decisions.length });
+
+    // Toast notification for captured decisions
+    if (client && decisions.length > 0) {
+      showToast(client, `Auto-captured ${decisions.length} decision(s)`, "success", "Brain");
+    }
   } finally {
     if (!db) conn.close();
   }

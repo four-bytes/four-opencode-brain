@@ -55,12 +55,6 @@ export function detectLanguage(filePath: string): string | null {
   return EXTENSION_LANG_MAP[ext] ?? null;
 }
 
-/** Get filetype (extension without dot) from path. */
-export function getFiletype(filePath: string): string {
-  const ext = extname(filePath);
-  return ext.startsWith(".") ? ext.slice(1) : ext;
-}
-
 // ---------------------------------------------------------------------------
 // File walking
 // ---------------------------------------------------------------------------

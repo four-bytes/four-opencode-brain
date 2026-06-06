@@ -7,7 +7,7 @@ import { ingestPath } from "./ingest";
 import { embedChunks } from "./ingest/embed";
 import { loadVec0, getVec0Error } from "./embed/extensionLoader";
 import { brainSearch } from "./search/unified";
-import { kbGet, kbAdd, kbRecord, kbReview, deriveEntryKey } from "./knowledge/store";
+import { kbGet, kbAdd, kbRecord, kbReview, kbSearch, deriveEntryKey } from "./knowledge/store";
 import type { KbAddInput, KbRecordInput, KbReviewInput } from "./knowledge/store";
 import {
   memoryAdd,
@@ -179,18 +179,21 @@ export default (async (input: PluginInput) => {
     },
     execute: async (args) => {
       const db = initBrainDatabase();
-      const results = brainSearch(db, args.query, {
-        filters: args.filters,
-        limit: args.limit ?? 20,
-        contentType: (args.contentType ?? "all") as
-          | "document"
-          | "memory"
-          | "knowledge"
-          | "chunk"
-          | "all",
-      });
-      db.close();
-      return JSON.stringify({ results, count: results.length });
+      try {
+        const results = brainSearch(db, args.query, {
+          filters: args.filters,
+          limit: args.limit ?? 20,
+          contentType: (args.contentType ?? "all") as
+            | "document"
+            | "memory"
+            | "knowledge"
+            | "chunk"
+            | "all",
+        });
+        return JSON.stringify({ results, count: results.length });
+      } finally {
+        db.close();
+      }
     },
   });
 
@@ -428,13 +431,88 @@ export default (async (input: PluginInput) => {
     },
   });
 
+  const brain_kb_search = tool({
+    description: "FTS5 search knowledge entries. Filter by entity_type, kind, confidence_min, review_state.",
+    args: {
+      query: s.string().describe("Search query"),
+      entity_type: s.string().optional().describe("Filter by entity type"),
+      kind: s.string().optional().describe("Filter by kind"),
+      confidence_min: s.number().optional().describe("Minimum confidence (0.0-1.0)"),
+      review_state: s.string().optional().describe("draft|reviewed|accepted|rejected|superseded"),
+      limit: s.number().optional().describe("Max results (default 20)"),
+      offset: s.number().optional().describe("Result offset"),
+    },
+    execute: async (args) => {
+      const db = initBrainDatabase();
+      try {
+        const results = kbSearch(db, {
+          query: args.query as string,
+          entity_type: args.entity_type as string | undefined,
+          kind: args.kind as string | undefined,
+          confidence_min: args.confidence_min as number | undefined,
+          review_state: args.review_state as string | undefined,
+          limit: (args.limit as number | undefined) ?? 20,
+          offset: args.offset as number | undefined,
+        });
+        return JSON.stringify({ results, count: results.length });
+      } finally {
+        db.close();
+      }
+    },
+  });
+
+  const brain_kb_stats = tool({
+    description: "Knowledge store statistics — totals, confidence distribution, review states.",
+    args: {},
+    execute: async () => {
+      const db = initBrainDatabase();
+      try {
+        const total = db
+          .query<{ c: number }, []>("SELECT COUNT(*) AS c FROM knowledge_entries")
+          .get()!;
+        const avgConfidence = db
+          .query<{ c: number | null }, []>("SELECT AVG(confidence) AS c FROM knowledge_entries")
+          .get()!;
+        const byEntityType = db
+          .query<{ entity_type: string; c: number }, []>(
+            "SELECT entity_type, COUNT(*) AS c FROM knowledge_entries GROUP BY entity_type ORDER BY c DESC",
+          )
+          .all();
+        const byReviewState = db
+          .query<{ review_state: string; c: number }, []>(
+            "SELECT review_state, COUNT(*) AS c FROM knowledge_entries GROUP BY review_state ORDER BY c DESC",
+          )
+          .all();
+
+        return JSON.stringify({
+          totalEntries: total.c,
+          avgConfidence: avgConfidence.c ?? 0,
+          byEntityType,
+          byReviewState,
+        });
+      } finally {
+        db.close();
+      }
+    },
+  });
+
   return {
     "experimental.chat.system.transform": async (_hookInput, output) => {
       output.system.push(brainSystemPrompt());
     },
     "chat.message": async (_hookInput, output) => {
       if (output.message?.role === "user" && output.message?.content) {
-        await onChatMessage(input, output.message as { role: string; content: string });
+        const stored = await onChatMessage(input, output.message as { role: string; content: string });
+        if (stored && output.parts) {
+          output.parts.push({
+            id: `brain-mem-stored-${Date.now()}`,
+            sessionID: output.message?.id ?? "",
+            messageID: output.message?.id ?? "",
+            type: "text" as const,
+            text: `[Memory stored] The user asked to remember something. Acknowledge this briefly.`,
+            synthetic: true,
+          } as any);
+        }
       }
     },
     "event": async (eventInput) => {
@@ -461,7 +539,7 @@ export default (async (input: PluginInput) => {
           log("debug", "autocapture", "Failed to fetch session messages", { error: String(err) });
         }
         if (text) {
-          await onSessionIdle(input, text);
+          await onSessionIdle(input, text, undefined, input.client);
         } else {
           log("debug", "autocapture", "No session text to scan for decisions", { sessionID });
         }
@@ -476,6 +554,8 @@ export default (async (input: PluginInput) => {
       brain_kb_add,
       brain_kb_record,
       brain_kb_review,
+      brain_kb_search,
+      brain_kb_stats,
     },
   };
 }) satisfies Plugin;
