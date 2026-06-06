@@ -24,8 +24,9 @@ import { brainSystemPrompt } from "./hooks/system-prompt";
 import { onChatMessage, onSessionIdle } from "./hooks/auto-capture";
 import { installBrainCommands } from "./commands/brain-slash";
 
-import { readFileSync } from "fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, statSync } from "fs";
 import { basename, join, resolve, isAbsolute } from "path";
+import { homedir } from "os";
 
 const VERSION: string = JSON.parse(
   readFileSync(join(import.meta.dir, "..", "package.json"), "utf-8")
@@ -51,12 +52,77 @@ function showToast(
   }
 }
 
-export default (async (input: PluginInput) => {
+/**
+ * Calculate ingest timeout dynamically based on file count.
+ *
+ * Heuristic: 10 files/s average throughput, minimum 5 minutes, cap at 30 minutes.
+ * Formula: Math.max(300_000, Math.min(1_800_000, fileCount * 100))
+ *
+ * This replaces the old hard 120s timeout that caused failures on large projects.
+ */
+function calculateIngestTimeout(fileCount: number): number {
+  const PER_FILE_MS = 100;          // 10 files/s → 100ms per file
+  const MIN_TIMEOUT = 300_000;      // 5 minutes minimum (300s)
+  const MAX_TIMEOUT = 7_200_000;    // 120 minutes cap
+  return Math.max(MIN_TIMEOUT, Math.min(MAX_TIMEOUT, fileCount * PER_FILE_MS));
+}
+
+/** Shared status file for TUI companion plugin — polls this to render footer. */
+
+const STATUS_FILE = join(homedir(), ".cache", "opencode", "brain-status.json");
+
+/** Module-level status mirror — read by HTTP endpoint for TUI polling */
+let currentStatus: Record<string, unknown> = { phase: "init", version: VERSION };
+
+function writeStatus(data: Record<string, unknown>): void {
+  currentStatus = { ...currentStatus, ...data };
+  try {
+    const dir = join(homedir(), ".cache", "opencode");
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    writeFileSync(STATUS_FILE, JSON.stringify({ ...data, updated: Date.now() }));
+  } catch {
+    // Never crash on status file failure
+  }
+}
+
+function clearStatus(): void {
+  try {
+    if (existsSync(STATUS_FILE)) writeFileSync(STATUS_FILE, JSON.stringify({ phase: 'idle', version: VERSION }));
+  } catch {
+    // Ignore
+  }
+}
+
+
+const _serverPlugin = async (input: PluginInput) => {
   const { client, project, directory, $ } = input;
 
   sessionCache.reset();
   log("info", "init", `v${VERSION} loaded`, { pid: process.pid });
   setSilent(true); // suppress all subsequent console output
+
+  // ---- Status HTTP server (polled by TUI via fetch) ----
+  try {
+    Bun.serve({
+      port: 16936,
+      hostname: "127.0.0.1",
+      fetch(req) {
+        if (new URL(req.url).pathname === "/status") {
+          return new Response(JSON.stringify(currentStatus), {
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        return new Response(null, { status: 404 });
+      },
+    });
+    log("info", "http", "Status HTTP server on :16936");
+  } catch (e) {
+    log("warn", "http", "HTTP server failed: " + String(e).slice(0, 80));
+  }
+
+
+  // Signal TUI we're initializing immediately
+  writeStatus({ phase: 'init', version: VERSION });
 
   // Ensure DB + schema on startup
   try {
@@ -68,32 +134,59 @@ export default (async (input: PluginInput) => {
 
   // ---- Auto-ingest on startup (non-blocking, with toast notifications) ----
   const autoIngest = process.env.BRAIN_AUTO_INGEST?.toLowerCase() !== "false";
-  if (autoIngest && directory) {
+
+  // Only auto-ingest inside git repos, never in home root
+  const normDir = directory ? resolve(directory) : "";
+  const homeRoot = resolve(homedir());
+  const isSystemDir = normDir === homeRoot || normDir === "/" || normDir === "/tmp"
+    || normDir.startsWith("/home/") && normDir.split("/").length === 3;
+  let hasGit = false;
+  try { hasGit = statSync(join(normDir, ".git")).isDirectory(); } catch {}
+  const shouldSkip = !hasGit || isSystemDir;
+
+  if (autoIngest && directory && !shouldSkip) {
     log("info", "auto-ingest", "Auto-ingest starting", { directory });
 
     // Fire-and-forget — don't block plugin readiness
     (async () => {
-      // Quick preliminary file count for toast
+      // Signal TUI we're scanning the directory tree
+      writeStatus({ phase: 'init', scanning: true, version: VERSION });
+
+      // Quick preliminary file count for toast + timeout calculation
       let fileCount = 0;
       try {
         const walked = await resolveFiles(directory, true);
         fileCount = walked.files.length;
-        showToast(client, `Indexing ${fileCount} files...`, "info", "Brain");
+        const timeoutS = (calculateIngestTimeout(fileCount) / 1000).toFixed(0);
+        showToast(client, `🧠 Indexing ${fileCount} files… (timeout: ${timeoutS}s)`, "info", "Brain");
+        writeStatus({ phase: 'ingest', ingesting: true, progress: 0, current: 0, total: fileCount, version: VERSION });
       } catch {
-        showToast(client, `Indexing ${project?.name ?? "project"}…`, "info", "Brain");
+        showToast(client, `🧠 Indexing ${project?.name ?? "project"}…`, "info", "Brain");
+        writeStatus({ phase: 'ingest', ingesting: true, progress: 0, version: VERSION });
       }
 
       const ingestDb = initBrainDatabase();
+      const timeoutMs = calculateIngestTimeout(fileCount);
       try {
         const result = await withTimeout(
-          ingestPath(ingestDb, directory, { recursive: true, reIndex: false, project: directory }),
-          120_000,
+          ingestPath(ingestDb, directory, {
+            recursive: true,
+            reIndex: false,
+            project: directory,
+            progressCallback: ({ current, total }) => {
+              const pct = total > 0 ? Math.round((current / total) * 100) : 0;
+              // Update status file every tick so TUI spinner stays live
+              writeStatus({ phase: 'ingest', ingesting: true, progress: pct, current, total, version: VERSION });
+            },
+          }),
+          timeoutMs,
           `auto-ingest ${directory}`,
         );
         if (result.filesFound === 0) {
           const dirname = directory.split("/").filter(Boolean).pop() ?? directory;
-          const msg = `Found 0 files in ${dirname} — check path`;
+          const msg = `🧠 Found 0 files in ${dirname} — check path`;
           showToast(client, msg, "warning", "Brain");
+          writeStatus({ phase: 'idle', ingesting: false, progress: 0, current: 0, total: 0, version: VERSION });
           log("warn", "auto-ingest", msg, {
             filesFound: result.filesFound,
             filesSkipped: result.filesSkipped,
@@ -103,8 +196,9 @@ export default (async (input: PluginInput) => {
             directory,
           });
         } else {
-          const msg = `Indexed ${result.filesIndexed} new, ${result.filesSkipped} skipped in ${(result.durationMs / 1000).toFixed(1)}s`;
+          const msg = `🧠 Indexed ${result.filesIndexed} new, ${result.filesSkipped} skipped in ${(result.durationMs / 1000).toFixed(1)}s`;
           showToast(client, msg, "success", "Brain");
+          writeStatus({ phase: 'idle', ingesting: false, progress: 100, current: result.filesIndexed, total: result.filesFound, version: VERSION });
           log("info", "auto-ingest", msg, {
             filesFound: result.filesFound,
             filesIndexed: result.filesIndexed,
@@ -116,12 +210,14 @@ export default (async (input: PluginInput) => {
         }
       } catch (err) {
         if (err instanceof TimeoutError) {
-          const msg = `Auto-ingest timed out after 120s — partial results`;
+          const msg = `🧠 Auto-ingest timed out after ${(timeoutMs / 1000).toFixed(0)}s — partial results`;
           showToast(client, msg, "warning", "Brain");
-          log("warn", "auto-ingest", msg, { directory });
+          writeStatus({ phase: 'idle', ingesting: false, version: VERSION });
+          log("warn", "auto-ingest", msg, { directory, timeoutMs });
         } else {
-          const errMsg = `Auto-ingest failed: ${String(err)}`;
+          const errMsg = `🧠 Auto-ingest failed: ${String(err)}`;
           showToast(client, errMsg, "error", "Brain");
+          writeStatus({ phase: 'idle', ingesting: false, version: VERSION });
           log("error", "auto-ingest", errMsg);
         }
       } finally {
@@ -130,6 +226,10 @@ export default (async (input: PluginInput) => {
     })();
   }
 
+  else if (autoIngest && shouldSkip) {
+    log("warn", "auto-ingest", "Skipped — not a git repo or system dir: " + normDir);
+    writeStatus({ phase: 'idle', blocked: true, version: VERSION });
+  }
   // Install slash commands on first run (silent unless error)
   try {
     installBrainCommands();
@@ -143,7 +243,7 @@ export default (async (input: PluginInput) => {
     const errDetail = getVec0Error();
     if (errDetail && !isVec0Loaded()) {
       log("warn", "vec0", `vec0 extension not available — vector search disabled. Chunk search falls back to SQL. (${errDetail})`, { platform: process.platform, arch: process.arch });
-      showToast(client, `vec0 extension unavailable — vector search disabled: ${errDetail}`, "error", "Brain");
+      showToast(client, `🧠 vec0 extension unavailable — vector search disabled: ${errDetail}`, "error", "Brain");
     }
     checkDb.close();
   }
@@ -156,12 +256,17 @@ export default (async (input: PluginInput) => {
         .query<{ c: number }, []>("SELECT COUNT(*) AS c FROM files")
         .get()!;
       if (fileCount.c === 0 && !autoIngest) {
-        showToast(client, "Brain initialized — use /brain ingest to index", "info", "Brain");
+        showToast(client, "🧠 Brain initialized — use /brain ingest to index", "info", "Brain");
       }
     } catch {
       // DB might not have tables yet on truly first run — ignore
     }
     firstRunDb.close();
+  }
+
+  // Init complete — only set idle if NOT auto-ingesting
+  if (!autoIngest) {
+    writeStatus({ phase: 'idle', version: VERSION });
   }
 
   // ---- Tool definitions ----
@@ -180,16 +285,32 @@ export default (async (input: PluginInput) => {
         // Resolve path relative to project directory (like RAG plugin does)
         const name = basename(resolvedPath);
         toolCtx.metadata({ title: `Indexing ${name}…` });
+
+        // Walk first to get file count for dynamic timeout
+        let fileCount = 0;
+        try {
+          const walked = await resolveFiles(resolvedPath, args.recursive !== false);
+          fileCount = walked.files.length;
+        } catch {
+          // fallback: use default
+        }
+        const timeoutMs = calculateIngestTimeout(fileCount);
+
         const result = await withTimeout(
           ingestPath(db, resolvedPath, {
             recursive: args.recursive !== false,
             reIndex: args.reIndex === true,
             project: toolCtx.directory,
+            progressCallback: ({ current, total }) => {
+              const pct = total > 0 ? Math.round((current / total) * 100) : 0;
+              // Update status file every tick so TUI spinner stays live
+              writeStatus({ phase: 'ingest', ingesting: true, progress: pct, current, total, version: VERSION });
+            },
           }),
-          120_000,
+          timeoutMs,
           `ingestPath(${resolvedPath})`,
         );
-        const msg = `Indexed ${result.filesIndexed} new, ${result.filesSkipped} skipped in ${(result.durationMs / 1000).toFixed(1)}s`;
+        const msg = `🧠 Indexed ${result.filesIndexed} new, ${result.filesSkipped} skipped in ${(result.durationMs / 1000).toFixed(1)}s`;
         toolCtx.metadata({
           title: msg,
           metadata: {
@@ -202,13 +323,13 @@ export default (async (input: PluginInput) => {
         return JSON.stringify(result);
       } catch (err) {
         if (err instanceof TimeoutError) {
-          const timeoutMsg = `Ingest timed out after 120s`;
+          const timeoutMsg = `🧠 Ingest timed out after ${(timeoutMs / 1000).toFixed(0)}s`;
           toolCtx.metadata({ title: timeoutMsg });
           showToast(client, timeoutMsg, "warning", "Brain Ingest");
           log("warn", "ingest-timeout", timeoutMsg, { path: resolvedPath });
           return JSON.stringify({ error: timeoutMsg, partial: true });
         }
-        const errMsg = `Ingest error: ${String(err)}`;
+        const errMsg = `🧠 Ingest error: ${String(err)}`;
         toolCtx.metadata({ title: errMsg });
         showToast(client, errMsg, "error", "Brain Ingest");
         return JSON.stringify({ error: String(err) });
@@ -228,6 +349,7 @@ export default (async (input: PluginInput) => {
       project: s.string().optional().describe("Project name or hash to scope search"),
     },
     execute: async (args, toolCtx) => {
+      writeStatus({ phase: 'idle', searching: true, version: VERSION });
       const db = initBrainDatabase();
       try {
         const results = await withTimeout(
@@ -246,14 +368,17 @@ export default (async (input: PluginInput) => {
           30_000,
           `brainSearch(${args.query})`,
         );
+        writeStatus({ phase: 'idle', version: VERSION });
         return JSON.stringify({ results, count: results.length });
       } catch (err) {
         if (err instanceof TimeoutError) {
           log("warn", "search-timeout", `Search timed out after 30s`, { query: args.query });
-          return JSON.stringify({ results: [], count: 0, error: "Search timed out — try a simpler query" });
+          writeStatus({ phase: 'idle', version: VERSION });
+        return JSON.stringify({ results: [], count: 0, error: "Search timed out — try a simpler query" });
         }
         const errMsg = `Search failed: ${err instanceof Error ? err.message : String(err)}`;
         log("error", "search", errMsg, { query: args.query });
+        writeStatus({ phase: 'idle', version: VERSION });
         return JSON.stringify({ results: [], count: 0, error: errMsg });
       } finally {
         db.close();
@@ -544,6 +669,7 @@ export default (async (input: PluginInput) => {
       } catch (err) {
         const errMsg = `kb_search failed: ${err instanceof Error ? err.message : String(err)}`;
         log("error", "kb-search", errMsg, { query: args.query });
+        writeStatus({ phase: 'idle', version: VERSION });
         return JSON.stringify({ results: [], count: 0, error: errMsg });
       } finally {
         db.close();
@@ -652,4 +778,14 @@ export default (async (input: PluginInput) => {
       brain_kb_stats,
     },
   };
-}) satisfies Plugin;
+};
+
+
+// ==================================================================
+// TUI companion — SolidJS component (see src/tui.tsx)
+
+// ==================================================================
+export default {
+  id: "four-opencode-brain",
+  server: _serverPlugin,
+};

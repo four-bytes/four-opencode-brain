@@ -33,6 +33,7 @@ import { loadVec0 } from "../embed/extensionLoader";
 export interface IngestResult {
   filesFound: number;
   filesSkipped: number; // hash match — already indexed
+  filesProcessed: number; // total processed (indexed + skipped)
   filesIndexed: number; // new or updated
   unsupported: number;  // excluded at walk time — unsupported extension
   chunksCreated: number;
@@ -47,6 +48,9 @@ export interface IngestOptions {
   reIndex?: boolean;
   /** Project path for project_hash tagging on documents and symbols. */
   project?: string;
+  /** Called after each file chunk+embed for progress reporting.
+   *  Receives { current, total } — current is 0-based, total is filesFound. */
+  progressCallback?: (progress: { current: number; total: number }) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -135,6 +139,7 @@ export async function ingestPath(
 
   const walkedFiles = walkResult.files;
   result.filesFound = walkedFiles.length;
+  result.filesProcessed = 0;
   result.unsupported = walkResult.skippedExt;
 
   emitProgressEvent("ingest.start", {
@@ -149,7 +154,7 @@ export async function ingestPath(
   }
 
   // ── 3. SAVEPOINT: wrap the entire ingest ────────────────────────────
-  const sp = "brain_ingest_" + Date.now();
+  const sp = "brain_ingest_" + generateId();
   db.exec(`SAVEPOINT ${sp}`);
 
   try {
@@ -185,6 +190,7 @@ export async function ingestPath(
         buf = await Bun.file(filePath).arrayBuffer();
       } catch (err) {
         result.errors.push(`Failed to read ${filePath}: ${String(err)}`);
+        result.filesProcessed++;
         continue;
       }
 
@@ -207,6 +213,8 @@ export async function ingestPath(
 
         if (existing && existing.content_hash === contentHash) {
           result.filesSkipped++;
+          result.filesProcessed++;
+          options?.progressCallback?.({ current: result.filesProcessed, total: walkedFiles.length });
           continue;
         }
       }
@@ -347,6 +355,8 @@ export async function ingestPath(
       }
 
       result.filesIndexed++;
+      result.filesProcessed++;
+      options?.progressCallback?.({ current: result.filesProcessed, total: walkedFiles.length });
     }
 
     // ── Commit ────────────────────────────────────────────────────────
