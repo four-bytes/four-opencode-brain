@@ -250,9 +250,11 @@ export default (async (input: PluginInput) => {
       } catch (err) {
         if (err instanceof TimeoutError) {
           log("warn", "search-timeout", `Search timed out after 30s`, { query: args.query });
-          return JSON.stringify({ results: [], count: 0, error: "Search timed out" });
+          return JSON.stringify({ results: [], count: 0, error: "Search timed out — try a simpler query" });
         }
-        throw err;
+        const errMsg = `Search failed: ${err instanceof Error ? err.message : String(err)}`;
+        log("error", "search", errMsg, { query: args.query });
+        return JSON.stringify({ results: [], count: 0, error: errMsg });
       } finally {
         db.close();
       }
@@ -372,14 +374,18 @@ export default (async (input: PluginInput) => {
             );
           case "get": {
             const found = memoryGet(db, args.id as string);
-            return JSON.stringify(found ?? { error: "not found" });
+            return JSON.stringify(found ?? { error: `Memory not found: ${args.id}` });
           }
           default:
             return JSON.stringify({
-              error: "unknown mode",
+              error: `Unknown memory mode: ${args.mode}`,
               modes: "add|search|list|forget|diary|get",
             });
         }
+      } catch (err) {
+        const errMsg = `Memory operation failed: ${err instanceof Error ? err.message : String(err)}`;
+        log("error", "memory", errMsg, { mode: args.mode });
+        return JSON.stringify({ error: errMsg });
       } finally {
         db.close();
       }
@@ -396,7 +402,11 @@ export default (async (input: PluginInput) => {
       const db = initBrainDatabase();
       try {
         const entry = kbGet(db, args.entry_key, args.kind);
-        return JSON.stringify(entry ?? { error: "not found" });
+        return JSON.stringify(entry ?? { error: `Knowledge entry not found: ${args.entry_key}` });
+      } catch (err) {
+        const errMsg = `kb_get failed: ${err instanceof Error ? err.message : String(err)}`;
+        log("error", "kb-get", errMsg, { entry_key: args.entry_key });
+        return JSON.stringify({ error: errMsg });
       } finally {
         db.close();
       }
@@ -433,6 +443,10 @@ export default (async (input: PluginInput) => {
           review_state: args.review_state as string | undefined,
         } satisfies KbAddInput);
         return JSON.stringify(result);
+      } catch (err) {
+        const errMsg = `kb_add failed: ${err instanceof Error ? err.message : String(err)}`;
+        log("error", "kb-add", errMsg, { entry_key: args.entry_key ?? deriveEntryKey(args.title as string) });
+        return JSON.stringify({ error: errMsg });
       } finally {
         db.close();
       }
@@ -465,6 +479,10 @@ export default (async (input: PluginInput) => {
           outcome: args.outcome as "fixed" | "failed" | "workaround" | "observed",
         } satisfies KbRecordInput);
         return JSON.stringify(occurrence);
+      } catch (err) {
+        const errMsg = `kb_record failed: ${err instanceof Error ? err.message : String(err)}`;
+        log("error", "kb-record", errMsg, { entry_key: args.entry_key, kind: args.kind });
+        return JSON.stringify({ error: errMsg });
       } finally {
         db.close();
       }
@@ -489,6 +507,10 @@ export default (async (input: PluginInput) => {
           confidence: args.confidence as number | undefined,
         } satisfies KbReviewInput);
         return JSON.stringify(entry);
+      } catch (err) {
+        const errMsg = `kb_review failed: ${err instanceof Error ? err.message : String(err)}`;
+        log("error", "kb-review", errMsg, { entry_key: args.entry_key, kind: args.kind });
+        return JSON.stringify({ error: errMsg });
       } finally {
         db.close();
       }
@@ -519,6 +541,10 @@ export default (async (input: PluginInput) => {
           offset: args.offset as number | undefined,
         });
         return JSON.stringify({ results, count: results.length });
+      } catch (err) {
+        const errMsg = `kb_search failed: ${err instanceof Error ? err.message : String(err)}`;
+        log("error", "kb-search", errMsg, { query: args.query });
+        return JSON.stringify({ results: [], count: 0, error: errMsg });
       } finally {
         db.close();
       }
@@ -554,6 +580,10 @@ export default (async (input: PluginInput) => {
           byEntityType,
           byReviewState,
         });
+      } catch (err) {
+        const errMsg = `kb_stats failed: ${err instanceof Error ? err.message : String(err)}`;
+        log("error", "kb-stats", errMsg);
+        return JSON.stringify({ error: errMsg });
       } finally {
         db.close();
       }

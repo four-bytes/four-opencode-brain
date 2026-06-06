@@ -289,7 +289,7 @@ export function kbRecord(db: Database, input: KbRecordInput): KbOccurrence {
     .get(input.entry_key, input.kind);
 
   if (!existing) {
-    throw new Error("entry not found");
+    throw new Error(`Entry not found: ${input.entry_key} (kind: ${input.kind})`);
   }
 
   const id = generateId();
