@@ -691,11 +691,11 @@ function migrateEntityTypeCheck(db: Database): void {
     } catch (err) {
       if (attempt < 2) {
         log("warn", "schema", `migration attempt ${attempt + 1} failed (locked), retrying...`);
-        // Busy-wait for 1s before retry
-        const start = Date.now();
-        while (Date.now() - start < 1000) { /* spin */ }
+        // Sleep 1s before retry — yields lock to other connections
+        Bun.sleepSync(1000)
       } else {
-        log("error", "schema", `entity_type CHECK migration failed after 3 attempts: ${String(err)}`);
+        log("warn", "schema", `entity_type CHECK migration deferred (DB locked after 3 attempts): ${String(err)}`);
+        // Non-fatal — migration will retry on next initBrainDatabase()
       }
     }
   }
