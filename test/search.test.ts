@@ -109,7 +109,7 @@ Run npm install to get started.
       "decision",
       "architecture, planning",
       "Project Architecture Decision",
-      "We decided to use FTS5 for search because it provides full-text search capabilities with BM25 ranking on indexed documents, memories, and knowledge entries.",
+      "We decided to use FTS5 for memory search because it provides full-text search capabilities with BM25 ranking on indexed documents and knowledge entries.",
       hashContent("architecture decision memory"),
     ],
   );
@@ -408,6 +408,141 @@ describe("brainSearch — edge cases", () => {
       limit: 0,
     });
     expect(results.length).toBeLessThanOrEqual(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// E5.2: RRF fusion + ordering + special characters
+// ---------------------------------------------------------------------------
+
+describe("brainSearch — RRF fusion (E5.2)", () => {
+  test("RRF fuses results across content types with proper ranking", async () => {
+    const results = await brainSearch(db, "memory", {
+      contentType: "all",
+      limit: 20,
+    });
+
+    // Should have results from multiple content types
+    const types = new Set(results.map((r) => r.content_type));
+    expect(types.size).toBeGreaterThanOrEqual(2);
+
+    // Every result should have a numeric score
+    for (const r of results) {
+      expect(typeof r.score).toBe("number");
+    }
+
+    // Scores should be in descending order (allow floating tolerance)
+    for (let i = 1; i < results.length; i++) {
+      expect(results[i].score).toBeLessThanOrEqual(results[i - 1].score + 1e-9);
+    }
+  });
+
+  test("RRF with single content type still returns ordered results", async () => {
+    const results = await brainSearch(db, "greet", {
+      contentType: "document",
+      limit: 10,
+    });
+
+    expect(results.length).toBeGreaterThanOrEqual(1);
+    for (const r of results) {
+      expect(r.content_type).toBe("document");
+      expect(typeof r.score).toBe("number");
+    }
+  });
+});
+
+describe("brainSearch — filter accuracy (E5.2)", () => {
+  test("language filter returns only matching documents", async () => {
+    const tsResults = await brainSearch(db, "function", {
+      filters: "language:typescript",
+      contentType: "document",
+      limit: 20,
+    });
+
+    expect(tsResults.length).toBeGreaterThanOrEqual(1);
+    for (const r of tsResults) {
+      expect(r.source_path).toMatch(/\.ts$/);
+    }
+
+    const phpResults = await brainSearch(db, "function", {
+      filters: "language:php",
+      contentType: "document",
+      limit: 20,
+    });
+
+    expect(phpResults.length).toBeGreaterThanOrEqual(1);
+    for (const r of phpResults) {
+      expect(r.source_path).toMatch(/\.php$/);
+    }
+  });
+
+  test("entity_type filter returns only matching knowledge", async () => {
+    const problemResults = await brainSearch(db, "memory", {
+      filters: "entity_type:problem",
+      contentType: "knowledge",
+      limit: 20,
+    });
+
+    expect(problemResults.length).toBeGreaterThanOrEqual(1);
+    for (const r of problemResults) {
+      expect(r.metadata?.entity_type).toBe("problem");
+    }
+
+    const patternResults = await brainSearch(db, "singleton", {
+      filters: "entity_type:pattern",
+      contentType: "knowledge",
+      limit: 20,
+    });
+
+    expect(patternResults.length).toBeGreaterThanOrEqual(1);
+    for (const r of patternResults) {
+      expect(r.metadata?.entity_type).toBe("pattern");
+    }
+  });
+});
+
+describe("brainSearch — special character queries (E5.2)", () => {
+  test("query with special characters does not crash", async () => {
+    const results = await brainSearch(db, "@#$%^&*()", {
+      contentType: "all",
+      limit: 10,
+    });
+    expect(Array.isArray(results)).toBe(true);
+  });
+
+  test("query with FTS5 reserved words does not crash", async () => {
+    const results = await brainSearch(db, "AND OR NOT NEAR", {
+      contentType: "all",
+      limit: 10,
+    });
+    expect(Array.isArray(results)).toBe(true);
+    expect(results.length).toBe(0);
+  });
+
+  test("query with mixed special chars and text finds results", async () => {
+    const results = await brainSearch(db, "greet()", {
+      contentType: "document",
+      limit: 10,
+    });
+    // Sanitize strips () → "greet" → should find hello.ts
+    expect(results.length).toBeGreaterThanOrEqual(1);
+    expect(results.some((r) => r.title === "hello.ts")).toBe(true);
+  });
+
+  test("query with angle brackets does not crash", async () => {
+    const results = await brainSearch(db, "<script>", {
+      contentType: "all",
+      limit: 10,
+    });
+    expect(Array.isArray(results)).toBe(true);
+  });
+
+  test("query with SQL wildcards does not crash", async () => {
+    const results = await brainSearch(db, "%_like%", {
+      contentType: "all",
+      limit: 10,
+    });
+    expect(Array.isArray(results)).toBe(true);
   });
 });
 
