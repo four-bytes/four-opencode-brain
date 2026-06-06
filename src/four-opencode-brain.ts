@@ -67,11 +67,10 @@ function calculateIngestTimeout(fileCount: number): number {
   return Math.max(MIN_TIMEOUT, Math.min(MAX_TIMEOUT, fileCount * PER_FILE_MS));
 }
 
-/** Shared status file for TUI companion plugin — polls this to render footer. */
+/** Shared status file for TUI companion — server writes, TUI reads via Bun.file() */
+import { BRAIN_STATUS_FILE } from "./shared";
 
-const STATUS_FILE = join(homedir(), ".cache", "opencode", "brain-status.json");
-
-/** Module-level status mirror — read by HTTP endpoint for TUI polling */
+/** Merged status state — written to file on every update, read by TUI plugin */
 let currentStatus: Record<string, unknown> = { phase: "init", version: VERSION };
 
 function writeStatus(data: Record<string, unknown>): void {
@@ -79,19 +78,12 @@ function writeStatus(data: Record<string, unknown>): void {
   try {
     const dir = join(homedir(), ".cache", "opencode");
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    writeFileSync(STATUS_FILE, JSON.stringify({ ...data, updated: Date.now() }));
+    writeFileSync(BRAIN_STATUS_FILE, JSON.stringify({ ...currentStatus, updated: Date.now() }));
   } catch {
     // Never crash on status file failure
   }
 }
 
-function clearStatus(): void {
-  try {
-    if (existsSync(STATUS_FILE)) writeFileSync(STATUS_FILE, JSON.stringify({ phase: 'idle', version: VERSION }));
-  } catch {
-    // Ignore
-  }
-}
 
 
 const _serverPlugin = async (input: PluginInput) => {
@@ -101,24 +93,7 @@ const _serverPlugin = async (input: PluginInput) => {
   log("info", "init", `v${VERSION} loaded`, { pid: process.pid });
   setSilent(true); // suppress all subsequent console output
 
-  // ---- Status HTTP server (polled by TUI via fetch) ----
-  try {
-    Bun.serve({
-      port: 16936,
-      hostname: "127.0.0.1",
-      fetch(req) {
-        if (new URL(req.url).pathname === "/status") {
-          return new Response(JSON.stringify(currentStatus), {
-            headers: { "Content-Type": "application/json" },
-          });
-        }
-        return new Response(null, { status: 404 });
-      },
-    });
-    log("info", "http", "Status HTTP server on :16936");
-  } catch (e) {
-    log("warn", "http", "HTTP server failed: " + String(e).slice(0, 80));
-  }
+  // Status file written to BRAIN_STATUS_FILE — TUI reads it directly (no HTTP server needed)
 
 
   // Signal TUI we're initializing immediately
