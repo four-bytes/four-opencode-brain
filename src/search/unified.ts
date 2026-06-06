@@ -8,6 +8,12 @@ import { sessionCache } from "../cache";
 import { loadVec0 } from "../embed/extensionLoader";
 import { generateEmbedding, float32ToBlob } from "../ingest/embed";
 import { EmbeddingService } from "../embed/embeddingService";
+import { sanitizeFtsQuery } from "./ftsSanitizer";
+import {
+  parseQuery,
+  validateFilters,
+  type ParsedFilters,
+} from "./queryParser";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -35,42 +41,23 @@ export interface SearchResult {
 }
 
 // ---------------------------------------------------------------------------
-// Parsed inline filters
+// RRF weight configuration
 // ---------------------------------------------------------------------------
 
-interface ParsedFilters {
-  language?: string;
-  path?: string;
-  symbol?: string;
-  kind?: string;
-  entity_type?: string;
-  type?: string;
-}
-
-// ---------------------------------------------------------------------------
-// Parse inline filter syntax: "language:ts path:src/ kind:function"
-// ---------------------------------------------------------------------------
-
-function parseFilters(raw?: string | Record<string, string>): ParsedFilters {
-  const filters: ParsedFilters = {};
-  if (!raw) return filters;
-
-  if (typeof raw === "string") {
-    for (const token of raw.split(/\s+/).filter(Boolean)) {
-      const idx = token.indexOf(":");
-      if (idx > 0) {
-        const key = token.slice(0, idx);
-        const val = token.slice(idx + 1);
-        if (key && val) {
-          (filters as Record<string, string>)[key] = val;
-        }
-      }
-    }
-  } else {
-    Object.assign(filters, raw);
-  }
-
-  return filters;
+/**
+ * Determine RRF weights per engine type.
+ *
+ * - When vec0 uses **real embeddings** (EmbeddingService available):
+ *   vec0 gets 1.0x, FTS5 gets 0.8x (semantic search more reliable)
+ * - When vec0 uses hash-based **pseudo-embeddings** (fallback):
+ *   FTS5 gets 1.0x, vec0 gets 0.8x (keyword search more reliable)
+ */
+function getRrfWeights(): { ftsWeight: number; vecWeight: number } {
+  const embService = EmbeddingService.getInstance();
+  const hasRealEmbeddings = embService.isAvailable();
+  return hasRealEmbeddings
+    ? { ftsWeight: 0.8, vecWeight: 1.0 }
+    : { ftsWeight: 1.0, vecWeight: 0.8 };
 }
 
 // ---------------------------------------------------------------------------
@@ -91,6 +78,32 @@ function makeCacheKey(query: string, options?: SearchOptions): string {
       ? options.filters
       : JSON.stringify(options?.filters ?? {});
   return `search:${query}:${filters}:${options?.limit ?? 20}:${options?.contentType ?? "all"}`;
+}
+
+// ---------------------------------------------------------------------------
+// Parse options.filters (old-style) into ParsedFilters
+// ---------------------------------------------------------------------------
+
+function parseOptionsFilters(raw?: string | Record<string, string>): ParsedFilters {
+  const filters: ParsedFilters = {};
+  if (!raw) return filters;
+
+  if (typeof raw === "string") {
+    for (const token of raw.split(/\s+/).filter(Boolean)) {
+      const idx = token.indexOf(":");
+      if (idx > 0) {
+        const key = token.slice(0, idx);
+        const val = token.slice(idx + 1);
+        if (key && val) {
+          (filters as Record<string, string>)[key] = val;
+        }
+      }
+    }
+  } else {
+    Object.assign(filters, raw);
+  }
+
+  return filters;
 }
 
 // ---------------------------------------------------------------------------
@@ -383,17 +396,33 @@ function searchChunksFallback(
 }
 
 // ---------------------------------------------------------------------------
-// RRF Fusion (Reciprocal Rank Fusion)
+// Weighted RRF Fusion (Reciprocal Rank Fusion)
 // ---------------------------------------------------------------------------
 
-function rrfFusion(lists: SearchResult[][], k: number = 60): SearchResult[] {
+interface WeightedList {
+  items: SearchResult[];
+  weight: number;
+}
+
+/**
+ * Weighted Reciprocal Rank Fusion.
+ *
+ * Each list contributes `weight / (k + rank)` per item, where rank is 1-based.
+ * Items are deduplicated across lists using a `<content_type>:<id>` composite key.
+ *
+ * @param lists  Weighted lists of search results
+ * @param k      Smoothing constant (default 60, min 1)
+ * @returns      Fused list sorted descending by weighted RRF score
+ */
+function rrfFusion(lists: WeightedList[], k: number = 60): SearchResult[] {
+  const safeK = Math.max(k, 1);
   const map = new Map<string, SearchResult & { rrfScore: number }>();
 
-  for (const list of lists) {
-    for (let i = 0; i < list.length; i++) {
-      const item = list[i];
+  for (const { items, weight } of lists) {
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
       const key = `${item.content_type}:${item.id}`;
-      const contribution = 1 / (k + i + 1); // rank = i + 1
+      const contribution = weight / (safeK + i + 1); // rank = i + 1
 
       const existing = map.get(key);
       if (existing) {
@@ -416,16 +445,22 @@ function rrfFusion(lists: SearchResult[][], k: number = 60): SearchResult[] {
 /**
  * Unified FTS5 + vec0 search across documents, memories, and knowledge entries.
  *
+ * - Parses structured filters from the query string itself (e.g. `language:ts path:src/`)
+ * - Supports query-level filters AND options-level filters (merged, options override query)
+ * - Sanitizes the query before passing to FTS5 MATCH (strips special chars, reserved words)
+ * - Validates filter keys and values (rejects unknown keys, unsupported languages, path traversal)
  * - Runs FTS5 MATCH queries on all three content types
  * - Applies inline filters (language:, path:, entity_type:, etc.)
  * - Runs vec0 vector search (real embeddings via EmbeddingService when available,
  *   hash-based pseudo-embeddings as fallback) if chunks_vec table exists
- * - Combines results via RRF fusion when vec0 results are available
+ * - Combines results via weighted RRF fusion:
+ *   - FTS5 1.0x / vec0 0.8x when using hash-based pseudo-embeddings
+ *   - vec0 1.0x / FTS5 0.8x when real embedding model is available
  * - Strips `<mark>` tags from excerpts
  * - Results are cached per session via LRU cache
  *
  * @param db    Open brain database handle
- * @param query FTS5 search query
+ * @param query FTS5 search query (may contain field:value filter tokens)
  * @param options SearchOptions
  * @returns     Array of SearchResult (never null, empty array if no results)
  */
@@ -439,45 +474,94 @@ export async function brainSearch(
     return [];
   }
 
-  // Cache check
+  // ── Parse structured filters from the query string ────────────────────
+  // e.g. "language:ts path:src/ kind:function hello world"
+  //       → filters: { language: "ts", path: "src/", kind: "function" }
+  //       → remaining text query: "hello world"
+  const parsed = parseQuery(query);
+  const mergedFilters = parsed.filters;
+
+  // ── Merge with options-level filters (options override query filters) ─
+  const optFilters = parseOptionsFilters(options?.filters);
+  for (const [key, value] of Object.entries(optFilters)) {
+    if (value !== undefined) {
+      (mergedFilters as Record<string, string>)[key] = value;
+    }
+  }
+
+  // ── Validate merged filters ───────────────────────────────────────────
+  const validation = validateFilters(mergedFilters);
+  if (!validation.valid) {
+    throw new Error(`Invalid search filters: ${validation.error}`);
+  }
+
+  // ── Sanitize the text query for FTS5 MATCH ────────────────────────────
+  const sanitized = sanitizeFtsQuery(parsed.query);
+  if (sanitized.length === 0) {
+    return [];
+  }
+
+  // Cache check (use original query + options for cache key stability)
   const key = makeCacheKey(query, options);
   const cached = sessionCache.search.get(key);
   if (cached) return cached as SearchResult[];
 
-  const filters = parseFilters(options?.filters);
   const limit = Math.max(1, options?.limit ?? 20);
   const ct = options?.contentType ?? "all";
-  const ftsLists: SearchResult[][] = [];
+  const ftsLists: WeightedList[] = [];
+
+  // Determine RRF weights based on embedding availability
+  const { ftsWeight, vecWeight } = getRrfWeights();
 
   // Run FTS5 searches based on content type filter
   if (ct === "all" || ct === "document") {
-    ftsLists.push(ftsSearchDocuments(db, query, filters, limit));
+    ftsLists.push({
+      items: ftsSearchDocuments(db, sanitized, mergedFilters, limit),
+      weight: ftsWeight,
+    });
   }
   if (ct === "all" || ct === "memory") {
-    ftsLists.push(ftsSearchMemories(db, query, filters, limit));
+    ftsLists.push({
+      items: ftsSearchMemories(db, sanitized, mergedFilters, limit),
+      weight: ftsWeight,
+    });
   }
   if (ct === "all" || ct === "knowledge") {
-    ftsLists.push(ftsSearchKnowledge(db, query, filters, limit));
+    ftsLists.push({
+      items: ftsSearchKnowledge(db, sanitized, mergedFilters, limit),
+      weight: ftsWeight,
+    });
   }
 
   // Vec0 chunk search (async — uses real embeddings when available)
   let chunkResults: SearchResult[] = [];
   if (ct === "all" || ct === "chunk") {
     if (hasVec0Table(db) && loadVec0(db)) {
-      chunkResults = await searchVec0(db, query, limit);
+      chunkResults = await searchVec0(db, sanitized, limit);
     } else {
-      chunkResults = searchChunksFallback(db, query, limit, filters);
+      chunkResults = searchChunksFallback(db, sanitized, limit, mergedFilters);
     }
   }
 
   let results: SearchResult[];
   if (chunkResults.length > 0) {
-    // RRF fusion with chunk results
-    ftsLists.push(chunkResults);
+    // Weighted RRF fusion with chunk results
+    ftsLists.push({ items: chunkResults, weight: vecWeight });
     results = rrfFusion(ftsLists, 60);
   } else {
     // Without chunk results, concatenate FTS5 lists in source order
-    results = ftsLists.flat().slice(0, limit);
+    // (still apply FTS weight to scored items)
+    if (ftsWeight !== 1.0) {
+      // Normalize scores when weight != 1.0
+      results = ftsLists.flatMap((l) =>
+        l.items.map((item) => ({
+          ...item,
+          score: item.score * l.weight,
+        })),
+      );
+    } else {
+      results = ftsLists.flatMap((l) => l.items);
+    }
   }
 
   // Cap at limit
