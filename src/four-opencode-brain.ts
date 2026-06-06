@@ -67,20 +67,41 @@ export default (async (input: PluginInput) => {
   const autoIngest = process.env.BRAIN_AUTO_INGEST?.toLowerCase() !== "false";
   if (autoIngest && directory) {
     showToast(client, `Indexing ${project?.name ?? "project"}…`, "info", "Brain");
-    process.stderr.write(`[brain] Auto-ingest: ${directory}\n`);
+    log("info", "auto-ingest", "Auto-ingest starting", { directory });
 
     // Fire-and-forget — don't block plugin readiness
     (async () => {
       const ingestDb = initBrainDatabase();
       try {
         const result = await ingestPath(ingestDb, directory, { recursive: true, reIndex: false });
-        const msg = `Indexed ${result.filesIndexed} new, ${result.filesSkipped} skipped in ${(result.durationMs / 1000).toFixed(1)}s`;
-        showToast(client, msg, "success", "Brain");
-        process.stderr.write(`[brain] ${msg}  (${directory})\n`);
+        if (result.filesFound === 0) {
+          const dirname = directory.split("/").filter(Boolean).pop() ?? directory;
+          const msg = `Found 0 files in ${dirname} — check path`;
+          showToast(client, msg, "warning", "Brain");
+          log("warn", "auto-ingest", msg, {
+            filesFound: result.filesFound,
+            filesSkipped: result.filesSkipped,
+            filesIndexed: result.filesIndexed,
+            errors: result.errors.length,
+            durationMs: result.durationMs,
+            directory,
+          });
+        } else {
+          const msg = `Indexed ${result.filesIndexed} new, ${result.filesSkipped} skipped in ${(result.durationMs / 1000).toFixed(1)}s`;
+          showToast(client, msg, "success", "Brain");
+          log("info", "auto-ingest", msg, {
+            filesFound: result.filesFound,
+            filesIndexed: result.filesIndexed,
+            filesSkipped: result.filesSkipped,
+            errors: result.errors.length,
+            durationMs: result.durationMs,
+            directory,
+          });
+        }
       } catch (err) {
         const errMsg = `Auto-ingest failed: ${String(err)}`;
         showToast(client, errMsg, "error", "Brain");
-        process.stderr.write(`[brain] ${errMsg}\n`);
+        log("error", "auto-ingest", errMsg);
       } finally {
         ingestDb.close();
       }

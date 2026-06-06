@@ -74,6 +74,7 @@ export async function walkDirectory(
   recursive: boolean = true,
 ): Promise<WalkedFile[]> {
   const files: WalkedFile[] = [];
+  let skippedExt = 0;
 
   async function walk(currentPath: string): Promise<void> {
     let entries: string[];
@@ -103,12 +104,17 @@ export async function walkDirectory(
         }
       } else if (stats.isFile()) {
         const language = detectLanguage(fullPath);
-        files.push({ path: fullPath, language });
+        if (language === null) {
+          skippedExt++;
+        } else {
+          files.push({ path: fullPath, language });
+        }
       }
     }
   }
 
   await walk(dirPath);
+  log("info", "walker", `Walked ${dirPath}: ${files.length} files (${skippedExt} skipped — unsupported extension)`);
   return files;
 }
 
