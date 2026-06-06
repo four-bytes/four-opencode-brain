@@ -425,8 +425,8 @@ describe("metadata table", () => {
 // ---------------------------------------------------------------------------
 
 describe("schema version and migration (E6.1)", () => {
-  test("SCHEMA_VERSION is 2", () => {
-    expect(SCHEMA_VERSION).toBe(2);
+  test("SCHEMA_VERSION is 3", () => {
+    expect(SCHEMA_VERSION).toBe(3);
   });
 
   test("runMigrations sets schema_version in metadata", () => {

@@ -86,7 +86,7 @@ export default (async (input: PluginInput) => {
       const ingestDb = initBrainDatabase();
       try {
         const result = await withTimeout(
-          ingestPath(ingestDb, directory, { recursive: true, reIndex: false }),
+          ingestPath(ingestDb, directory, { recursive: true, reIndex: false, project: directory }),
           120_000,
           `auto-ingest ${directory}`,
         );
@@ -184,6 +184,7 @@ export default (async (input: PluginInput) => {
           ingestPath(db, resolvedPath, {
             recursive: args.recursive !== false,
             reIndex: args.reIndex === true,
+            project: toolCtx.directory,
           }),
           120_000,
           `ingestPath(${resolvedPath})`,
@@ -223,9 +224,10 @@ export default (async (input: PluginInput) => {
       query: s.string().describe("Search query"),
       filters: s.string().optional().describe("language:ts path:src/ kind:function entity_type:problem"),
       limit: s.number().optional().describe("Max results (default 20)"),
-      contentType: s.string().optional().describe("document|memory|knowledge|chunk|all"),
+      contentType: s.string().optional().describe("document|memory|knowledge|chunk|symbol|all"),
+      project: s.string().optional().describe("Project name or hash to scope search"),
     },
-    execute: async (args) => {
+    execute: async (args, toolCtx) => {
       const db = initBrainDatabase();
       try {
         const results = await withTimeout(
@@ -237,7 +239,9 @@ export default (async (input: PluginInput) => {
               | "memory"
               | "knowledge"
               | "chunk"
+              | "symbol"
               | "all",
+            project: (args.project as string | undefined) ?? toolCtx.directory,
           }),
           30_000,
           `brainSearch(${args.query})`,
@@ -309,6 +313,7 @@ export default (async (input: PluginInput) => {
       offset: s.number().optional(),
       date: s.string().optional(),
       id: s.string().optional(),
+      crossProject: s.boolean().optional().describe("Show memories from all projects"),
       subMode: s.string().optional().describe("For diary mode: add | get"),
       diaryTitle: s.string().optional().describe("Diary entry title (for add)"),
       diaryContent: s.string().optional().describe("Diary entry content (for add)"),
@@ -335,6 +340,7 @@ export default (async (input: PluginInput) => {
                 type: args.type as string | undefined,
                 tags: args.tags as string | undefined,
                 project: args.project as string | undefined,
+                crossProject: args.crossProject === true,
                 limit: args.limit as number | undefined,
               }),
             );
@@ -597,7 +603,7 @@ export default (async (input: PluginInput) => {
           log("debug", "autocapture", "Failed to fetch session messages", { error: String(err) });
         }
         if (text) {
-          await onSessionIdle(input, text, undefined, input.client);
+          await onSessionIdle(input, text, undefined, input.client, sessionID);
         } else {
           log("debug", "autocapture", "No session text to scan for decisions", { sessionID });
         }

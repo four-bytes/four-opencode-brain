@@ -5,7 +5,7 @@
 import type { PluginInput } from "@opencode-ai/plugin";
 import { Database } from "bun:sqlite";
 import { openDatabase, createSchema } from "../schema";
-import { memoryAdd } from "../memory/store";
+import { memoryAdd, diaryAdd } from "../memory/store";
 import { kbAdd, kbReview, deriveEntryKey } from "../knowledge/store";
 import { log } from "../logger";
 
@@ -46,6 +46,16 @@ const DECISION_PHRASES = [
   "the fix is",
   "the solution is",
 ];
+
+/** "we considered X but chose Y" regex pattern */
+const CONSIDERED_PATTERN = /we considered\s.+?\sbut\s(chose|decided|went with)/i;
+
+/** Error/repeated-error patterns for E8.2 passive capture (lowercased) */
+const ERROR_KEYWORDS = ["error", "failed", "crash", "bug", "exception", "typo", "mistake"];
+
+// E8.2: Throttle — max 3 auto-captures per session
+const autoCaptureCounts = new Map<string, number>();
+const MAX_AUTO_CAPTURES = 3;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -141,6 +151,44 @@ export async function onChatMessage(
   }
 }
 
+/**
+ * Scan text for error/repeated error keywords and return context snippets.
+ * Each keyword yields at most one capture per session (dedup by keyword).
+ */
+export function scanForErrors(
+  text: string,
+): Array<{ keyword: string; context: string; count: number }> {
+  const results: Array<{ keyword: string; context: string; count: number }> = [];
+  for (const keyword of ERROR_KEYWORDS) {
+    const regex = new RegExp(`.{0,40}${escapeRegex(keyword)}.{0,40}`, "gi");
+    const contexts: string[] = [];
+    let m: RegExpExecArray | null;
+    while ((m = regex.exec(text)) !== null) {
+      contexts.push(m[0].trim());
+    }
+    if (contexts.length > 1) {
+      // Only capture if the keyword appears more than once (repeated pattern)
+      results.push({ keyword, context: contexts[0], count: contexts.length });
+    }
+  }
+  return results;
+}
+
+/**
+ * Scan text for "we considered X but chose Y" patterns.
+ */
+export function scanForConsideredDecisions(
+  text: string,
+): Array<{ context: string }> {
+  const matches: Array<{ context: string }> = [];
+  const regex = new RegExp(CONSIDERED_PATTERN.source, "gi");
+  let m: RegExpExecArray | null;
+  while ((m = regex.exec(text)) !== null) {
+    matches.push({ context: m[0].trim() });
+  }
+  return matches;
+}
+
 // ---------------------------------------------------------------------------
 // Hook: event (session.idle) — delayed decision auto-capture
 // ---------------------------------------------------------------------------
@@ -161,43 +209,47 @@ export async function onSessionIdle(
   text?: string,
   db?: Database,
   client?: PluginInput["client"],
+  sessionId?: string,
 ): Promise<void> {
   if (!text) return;
 
-  log("debug", "autocapture", "Scanning session text for decisions", { textLength: text.length });
-
-  const decisions = scanForDecisions(text);
-  if (decisions.length === 0) {
-    log("debug", "autocapture", "No decision patterns found in session text", { textLength: text.length });
-    return;
-  }
-
+  const sid = sessionId ?? "default";
   const conn = db ?? openDatabase();
+
   try {
     createSchema(conn);
+    let totalCaptures = 0;
 
-    for (const decision of decisions) {
-      const entryKey = deriveEntryKey(decision.context.slice(0, 64));
+    // ── E8.2: Throttle check ──────────────────────────────────────────────
+    const currentCount = autoCaptureCounts.get(sid) ?? 0;
+    if (currentCount >= MAX_AUTO_CAPTURES) {
+      log("debug", "autocapture", "Throttle reached — skipping auto-capture", { session: sid });
+      return;
+    }
 
-      // Dedup: skip if entry_key already exists for kind="decision"
+    log("debug", "autocapture", "Scanning session text", { textLength: text.length, session: sid });
+
+    // ── E8.2: Scan for "we considered X but chose Y" patterns ──────────────
+    const consideredDecisions = scanForConsideredDecisions(text);
+    let consideredSaved = 0;
+    for (const cd of consideredDecisions) {
+      if (totalCaptures >= MAX_AUTO_CAPTURES) break;
+      const entryKey = deriveEntryKey(cd.context.slice(0, 64));
+
       const existing = conn
         .query<{ entry_key: string }, [string]>(
           "SELECT entry_key FROM knowledge_entries WHERE entry_key = ? AND kind = 'decision' LIMIT 1",
         )
         .get(entryKey);
-
       if (existing) continue;
 
-      // Create entry (new entries always get confidence 0.0)
       kbAdd(conn, {
         entry_key: entryKey,
         kind: "decision",
-        title: `Decision: ${decision.phrase}`,
-        description: decision.context,
+        title: "Decision: considered alternative",
+        description: cd.context,
         entity_type: "decision",
       });
-
-      // Update confidence to 0.1 via review (same state, different confidence)
       kbReview(conn, {
         entry_key: entryKey,
         kind: "decision",
@@ -205,17 +257,105 @@ export async function onSessionIdle(
         confidence: 0.1,
       });
 
-      log("info", "autocapture", "auto-captured decision", {
-        entryKey,
-        phrase: decision.phrase,
-      });
+      log("info", "autocapture", "auto-captured considered decision", { entryKey });
+      consideredSaved++;
+      totalCaptures++;
     }
 
-    log("debug", "autocapture", "Auto-capture complete", { decisionsFound: decisions.length });
+    // ── Scan for standard decision phrases ─────────────────────────────────
+    const decisions = scanForDecisions(text);
+    let decisionsSaved = 0;
+    for (const decision of decisions) {
+      if (totalCaptures >= MAX_AUTO_CAPTURES) break;
+      const entryKey = deriveEntryKey(decision.context.slice(0, 64));
 
-    // Toast notification for captured decisions
-    if (client && decisions.length > 0) {
-      showToast(client, `Auto-captured ${decisions.length} decision(s)`, "success", "Brain");
+      const existing = conn
+        .query<{ entry_key: string }, [string]>(
+          "SELECT entry_key FROM knowledge_entries WHERE entry_key = ? AND kind = 'decision' LIMIT 1",
+        )
+        .get(entryKey);
+      if (existing) continue;
+
+      kbAdd(conn, {
+        entry_key: entryKey,
+        kind: "decision",
+        title: `Decision: ${decision.phrase}`,
+        description: decision.context,
+        entity_type: "decision",
+      });
+      kbReview(conn, {
+        entry_key: entryKey,
+        kind: "decision",
+        review_state: "draft",
+        confidence: 0.1,
+      });
+
+      log("info", "autocapture", "auto-captured decision", { entryKey, phrase: decision.phrase });
+      decisionsSaved++;
+      totalCaptures++;
+    }
+
+    // ── E8.2: Capture repeated error patterns as type="error" memory ──────
+    const errors = scanForErrors(text);
+    let errorsSaved = 0;
+    for (const err of errors) {
+      if (totalCaptures >= MAX_AUTO_CAPTURES) break;
+
+      memoryAdd(conn, {
+        type: "error",
+        title: `Repeated error pattern: ${err.keyword}`,
+        content: `The keyword "${err.keyword}" appeared ${err.count} times in the session.\nContext: ${err.context}`,
+        tags: `error,${err.keyword},auto-captured`,
+      });
+
+      log("info", "autocapture", "auto-captured error pattern", { keyword: err.keyword, count: err.count });
+      errorsSaved++;
+      totalCaptures++;
+    }
+
+    // ── E8.3: Diary Auto-Capture ──────────────────────────────────────────
+    const now = new Date();
+    const dateStr = now.toISOString().split("T")[0];
+    const timeStr = now.toTimeString().split(" ")[0];
+
+    const diaryLines: string[] = [];
+    diaryLines.push(`Session activity summary`);
+    diaryLines.push(``);
+    if (decisionsSaved > 0 || consideredSaved > 0) {
+      diaryLines.push(`Decisions made: ${decisionsSaved + consideredSaved}`);
+    }
+    if (errorsSaved > 0) {
+      diaryLines.push(`Errors encountered: ${errorsSaved}`);
+    }
+    diaryLines.push(``);
+    diaryLines.push(`---`);
+    diaryLines.push(`Session text snippet:`);
+    diaryLines.push(text.slice(0, 500));
+
+    diaryAdd(conn, {
+      date: dateStr,
+      title: `Session — ${dateStr} ${timeStr}`,
+      content: diaryLines.join("\n"),
+    });
+
+    // Update throttle counter
+    autoCaptureCounts.set(sid, (autoCaptureCounts.get(sid) ?? 0) + totalCaptures);
+
+    const summary: string[] = [];
+    if (decisionsSaved + consideredSaved > 0) summary.push(`${decisionsSaved + consideredSaved} decision(s)`);
+    if (errorsSaved > 0) summary.push(`${errorsSaved} error pattern(s)`);
+    const summaryText = summary.length > 0 ? summary.join(", ") : "no new captures";
+
+    log("info", "autocapture", "Auto-capture complete", {
+      decisionsFound: decisions.length + consideredDecisions.length,
+      decisionsSaved,
+      errorsSaved,
+      totalCaptures,
+      session: sid,
+    });
+
+    if (client && (decisionsSaved + consideredSaved + errorsSaved) > 0) {
+      showToast(client, `Auto-captured ${summaryText}`, "success", "Brain");
     }
   } finally {
     if (!db) conn.close();
