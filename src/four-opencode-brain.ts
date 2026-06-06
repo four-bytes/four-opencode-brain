@@ -52,22 +52,8 @@ function calculateIngestTimeout(fileCount: number): number {
   return Math.max(MIN_TIMEOUT, Math.min(MAX_TIMEOUT, fileCount * PER_FILE_MS));
 }
 
-/** Shared status file for TUI companion — server writes, TUI reads via Bun.file() */
-import { BRAIN_STATUS_FILE } from "./shared";
-
-/** Merged status state — written to file on every update, read by TUI plugin */
-let currentStatus: Record<string, unknown> = { phase: "init", version: VERSION };
-
-function writeStatus(data: Record<string, unknown>): void {
-  currentStatus = { ...currentStatus, ...data };
-  try {
-    const dir = join(homedir(), ".cache", "opencode");
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    writeFileSync(BRAIN_STATUS_FILE, JSON.stringify({ ...currentStatus, updated: Date.now() }));
-  } catch {
-    // Never crash on status file failure
-  }
-}
+/** Unified status updates — see src/status.ts */
+import { updateStatus, initStatus } from "./status";
 
 
 
@@ -75,7 +61,7 @@ const _serverPlugin = async (input: PluginInput) => {
   const { client, project, directory, $ } = input;
 
   sessionCache.reset();
-  const toast = createToast(client, "Brain 🧠");
+  initStatus(client);
   log("info", "init", `v${VERSION} loaded`, { pid: process.pid });
   setSilent(true); // suppress all subsequent console output
 
@@ -83,7 +69,7 @@ const _serverPlugin = async (input: PluginInput) => {
 
 
   // Signal TUI we're initializing immediately
-  writeStatus({ phase: 'init', version: VERSION });
+  updateStatus("ready");
 
   // Ensure DB + schema on startup
   try {
@@ -111,7 +97,7 @@ const _serverPlugin = async (input: PluginInput) => {
     // Fire-and-forget — don't block plugin readiness
     (async () => {
       // Signal TUI we're scanning the directory tree
-      writeStatus({ phase: 'init', scanning: true, version: VERSION });
+      updateStatus("busy", { text: "scanning files" });
 
       // Quick preliminary file count for toast + timeout calculation
       let fileCount = 0;
@@ -120,10 +106,10 @@ const _serverPlugin = async (input: PluginInput) => {
         fileCount = walked.files.length;
         const timeoutS = (calculateIngestTimeout(fileCount) / 1000).toFixed(0);
         toast( `Indexing ${fileCount} files… (timeout: ${timeoutS}s)`, "info", "Brain 🧠");
-        writeStatus({ phase: 'ingest', scanning: false, ingesting: true, progress: 0, current: 0, total: fileCount, version: VERSION });
+        updateStatus("busy", { text: `ingesting 0/${fileCount}`, progress: 0, current: 0, total: fileCount });
       } catch {
         toast( `Indexing ${project?.name ?? "project"}…`, "info", "Brain 🧠");
-        writeStatus({ phase: 'ingest', scanning: false, ingesting: true, progress: 0, version: VERSION });
+        updateStatus("busy", { text: "ingesting…", progress: 0 });
       }
 
       const ingestDb = initBrainDatabase();
@@ -137,7 +123,7 @@ const _serverPlugin = async (input: PluginInput) => {
             progressCallback: ({ current, total }) => {
               const pct = total > 0 ? Math.round((current / total) * 100) : 0;
               // Update status file every tick so TUI spinner stays live
-              writeStatus({ phase: 'ingest', ingesting: true, progress: pct, current, total, version: VERSION });
+              updateStatus("busy", { text: `ingesting ${current}/${total} (${pct}%)`, progress: pct, current, total });
             },
           }),
           timeoutMs,
@@ -147,7 +133,7 @@ const _serverPlugin = async (input: PluginInput) => {
           const dirname = directory.split("/").filter(Boolean).pop() ?? directory;
           const msg = `🧠 Found 0 files in ${dirname} — check path`;
           toast( msg.replace("🧠 ", ""), "warning", "Brain 🧠");
-          writeStatus({ phase: 'idle', ingesting: false, progress: 0, current: 0, total: 0, version: VERSION });
+          updateStatus("warning", { toast: msg.replace("🧠 ", "") });
           log("warn", "auto-ingest", msg, {
             filesFound: result.filesFound,
             filesSkipped: result.filesSkipped,
@@ -159,7 +145,7 @@ const _serverPlugin = async (input: PluginInput) => {
         } else {
           const msg = `🧠 Indexed ${result.filesIndexed} new, ${result.filesSkipped} skipped in ${(result.durationMs / 1000).toFixed(1)}s`;
           toast( msg.replace("🧠 ", ""), "success", "Brain 🧠");
-          writeStatus({ phase: 'idle', ingesting: false, progress: 100, current: result.filesIndexed, total: result.filesFound, version: VERSION });
+          updateStatus("success", { toast: msg.replace("🧠 ", "") });
           log("info", "auto-ingest", msg, {
             filesFound: result.filesFound,
             filesIndexed: result.filesIndexed,
@@ -173,12 +159,12 @@ const _serverPlugin = async (input: PluginInput) => {
         if (err instanceof TimeoutError) {
           const msg = `🧠 Auto-ingest timed out after ${(timeoutMs / 1000).toFixed(0)}s — partial results`;
           toast( msg.replace("🧠 ", ""), "warning", "Brain 🧠");
-          writeStatus({ phase: 'idle', ingesting: false, version: VERSION });
+          updateStatus("warning", { toast: msg.replace("🧠 ", "") });
           log("warn", "auto-ingest", msg, { directory, timeoutMs });
         } else {
           const errMsg = `🧠 Auto-ingest failed: ${String(err)}`;
           toast( errMsg.replace("🧠 ", ""), "error", "Brain 🧠");
-          writeStatus({ phase: 'idle', ingesting: false, version: VERSION });
+          updateStatus("warning", { toast: msg.replace("🧠 ", "") });
           log("error", "auto-ingest", errMsg);
         }
       } finally {
@@ -189,7 +175,7 @@ const _serverPlugin = async (input: PluginInput) => {
 
   else if (autoIngest && shouldSkip) {
     log("warn", "auto-ingest", "Skipped — not a git repo or system dir: " + normDir);
-    writeStatus({ phase: 'idle', blocked: true, version: VERSION });
+    updateStatus("warning", { text: "ingest excluded" });
   }
   // Install slash commands on first run (silent unless error)
   try {
@@ -227,7 +213,7 @@ const _serverPlugin = async (input: PluginInput) => {
 
   // Init complete — only set idle if NOT auto-ingesting
   if (!autoIngest) {
-    writeStatus({ phase: 'idle', version: VERSION });
+    updateStatus("ready");
   }
 
   // ---- Tool definitions ----
@@ -265,7 +251,7 @@ const _serverPlugin = async (input: PluginInput) => {
             progressCallback: ({ current, total }) => {
               const pct = total > 0 ? Math.round((current / total) * 100) : 0;
               // Update status file every tick so TUI spinner stays live
-              writeStatus({ phase: 'ingest', ingesting: true, progress: pct, current, total, version: VERSION });
+              updateStatus("busy", { text: `ingesting ${current}/${total} (${pct}%)`, progress: pct, current, total });
             },
           }),
           timeoutMs,
@@ -310,7 +296,7 @@ const _serverPlugin = async (input: PluginInput) => {
       project: s.string().optional().describe("Project name or hash to scope search"),
     },
     execute: async (args, toolCtx) => {
-      writeStatus({ phase: 'idle', searching: true, version: VERSION });
+      updateStatus("busy", { text: "searching" });
       const db = initBrainDatabase();
       try {
         const results = await withTimeout(
@@ -329,17 +315,17 @@ const _serverPlugin = async (input: PluginInput) => {
           30_000,
           `brainSearch(${args.query})`,
         );
-        writeStatus({ phase: 'idle', version: VERSION });
+        updateStatus("ready");
         return JSON.stringify({ results, count: results.length });
       } catch (err) {
         if (err instanceof TimeoutError) {
           log("warn", "search-timeout", `Search timed out after 30s`, { query: args.query });
-          writeStatus({ phase: 'idle', version: VERSION });
+          updateStatus("ready");
         return JSON.stringify({ results: [], count: 0, error: "Search timed out — try a simpler query" });
         }
         const errMsg = `Search failed: ${err instanceof Error ? err.message : String(err)}`;
         log("error", "search", errMsg, { query: args.query });
-        writeStatus({ phase: 'idle', version: VERSION });
+        updateStatus("ready");
         return JSON.stringify({ results: [], count: 0, error: errMsg });
       } finally {
         db.close();
@@ -351,6 +337,7 @@ const _serverPlugin = async (input: PluginInput) => {
     description: "Rebuild vec0 vector index from chunks.",
     args: {},
     execute: async () => {
+      updateStatus("busy", { text: "Rebuilding vector index…" });
       const db = initBrainDatabase();
       try {
         db.run("DROP TABLE IF EXISTS chunks_vec");
@@ -372,6 +359,7 @@ const _serverPlugin = async (input: PluginInput) => {
           embedded = await embedChunks(db, chunkIds);
         }
 
+                updateStatus("success", { toast: `Vector index rebuilt: ${embedded}/${totalChunks} chunks` });
         return JSON.stringify({
           ok: true,
           chunks: totalChunks,
@@ -380,7 +368,7 @@ const _serverPlugin = async (input: PluginInput) => {
         });
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);
-        return JSON.stringify({ ok: false, error: msg });
+                return JSON.stringify({ ok: false, error: msg });
       } finally {
         db.close();
       }
@@ -412,15 +400,16 @@ const _serverPlugin = async (input: PluginInput) => {
       try {
         switch (args.mode) {
           case "add":
-            return JSON.stringify(
-              memoryAdd(db, {
+            updateStatus("busy", { text: "Storing memory…" });
+            const addResult = memoryAdd(db, {
                 type: (args.type ?? "fact") as MemoryInputType,
                 title: args.title as string,
                 content: args.content as string,
                 tags: args.tags as string | undefined,
                 project: args.project as string | undefined,
-              }),
-            );
+              });
+            updateStatus("success", { toast: "Memory stored" });
+            return JSON.stringify(addResult);
           case "search":
             return JSON.stringify(
               memorySearch(db, {
@@ -442,7 +431,10 @@ const _serverPlugin = async (input: PluginInput) => {
               }),
             );
           case "forget":
-            return JSON.stringify({ ok: memoryForget(db, args.id as string) });
+            updateStatus("busy", { text: "Removing memory…" });
+            const forgetOk = memoryForget(db, args.id as string);
+            updateStatus(forgetOk ? "success" : "error", { toast: forgetOk ? "Memory removed" : "Memory not found" });
+            return JSON.stringify({ ok: forgetOk });
           case "diary":
             if (args.subMode === "add") {
               if (!args.diaryTitle || !args.diaryContent) {
@@ -516,6 +508,7 @@ const _serverPlugin = async (input: PluginInput) => {
     execute: async (args) => {
       const db = initBrainDatabase();
       try {
+                updateStatus("busy", { text: "Saving knowledge entry…" });
         const result = kbAdd(db, {
           entry_key: (args.entry_key as string) ?? deriveEntryKey(args.title as string),
           kind: (args.kind as string) ?? "problem",
@@ -528,8 +521,10 @@ const _serverPlugin = async (input: PluginInput) => {
           confidence: args.confidence as number | undefined,
           review_state: args.review_state as string | undefined,
         } satisfies KbAddInput);
+                updateStatus("success", { toast: "Knowledge entry saved" });
         return JSON.stringify(result);
       } catch (err) {
+        updateStatus("error", { toast: `kb_add failed` });
         const errMsg = `kb_add failed: ${err instanceof Error ? err.message : String(err)}`;
         log("error", "kb-add", errMsg, { entry_key: args.entry_key ?? deriveEntryKey(args.title as string) });
         return JSON.stringify({ error: errMsg });
@@ -554,6 +549,7 @@ const _serverPlugin = async (input: PluginInput) => {
     execute: async (args) => {
       const db = initBrainDatabase();
       try {
+                updateStatus("busy", { text: "Recording occurrence…" });
         const occurrence = kbRecord(db, {
           entry_key: args.entry_key as string,
           kind: args.kind as string,
@@ -564,8 +560,10 @@ const _serverPlugin = async (input: PluginInput) => {
           observed_symptoms: args.observed_symptoms as string | undefined,
           outcome: args.outcome as "fixed" | "failed" | "workaround" | "observed",
         } satisfies KbRecordInput);
+                updateStatus("success", { toast: "Occurrence recorded" });
         return JSON.stringify(occurrence);
       } catch (err) {
+        updateStatus("error", { toast: `kb_record failed` });
         const errMsg = `kb_record failed: ${err instanceof Error ? err.message : String(err)}`;
         log("error", "kb-record", errMsg, { entry_key: args.entry_key, kind: args.kind });
         return JSON.stringify({ error: errMsg });
@@ -586,14 +584,17 @@ const _serverPlugin = async (input: PluginInput) => {
     execute: async (args) => {
       const db = initBrainDatabase();
       try {
+                updateStatus("busy", { text: "Updating review…" });
         const entry = kbReview(db, {
           entry_key: args.entry_key as string,
           kind: args.kind as string,
           review_state: args.review_state as "draft" | "reviewed" | "accepted" | "rejected" | "superseded",
           confidence: args.confidence as number | undefined,
         } satisfies KbReviewInput);
+                updateStatus("success", { toast: "Review updated" });
         return JSON.stringify(entry);
       } catch (err) {
+        updateStatus("error", { toast: `kb_review failed` });
         const errMsg = `kb_review failed: ${err instanceof Error ? err.message : String(err)}`;
         log("error", "kb-review", errMsg, { entry_key: args.entry_key, kind: args.kind });
         return JSON.stringify({ error: errMsg });
@@ -630,7 +631,7 @@ const _serverPlugin = async (input: PluginInput) => {
       } catch (err) {
         const errMsg = `kb_search failed: ${err instanceof Error ? err.message : String(err)}`;
         log("error", "kb-search", errMsg, { query: args.query });
-        writeStatus({ phase: 'idle', version: VERSION });
+        updateStatus("ready");
         return JSON.stringify({ results: [], count: 0, error: errMsg });
       } finally {
         db.close();
