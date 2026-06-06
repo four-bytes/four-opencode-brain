@@ -93,7 +93,7 @@ describe("kbAdd — create", () => {
       title: "Create test entry",
       description: "A test entry for creation",
       tags: "test,create",
-      entity_type: "bug",
+      entity_type: "pattern",
     });
   });
 
