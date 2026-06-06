@@ -1,6 +1,6 @@
 {
   "name": "@four-bytes/four-opencode-brain",
-  "version": "1.0.27",
+  "version": "1.0.28",
   "description": "Unified brain plugin \u2014 single SQLite DB for RAG search, memory, and knowledge base with content-hash dedup and per-session LRU cache",
   "license": "Apache-2.0",
   "type": "module",
@@ -30,7 +30,15 @@
   },
   "devDependencies": {},
   "exports": {
-    ".": "dist/four-opencode-brain.js",
+    ".": {
+      "import": "./dist/four-opencode-brain.js"
+    },
+    "./server": {
+      "import": "./dist/four-opencode-brain.js",
+      "config": {
+        "enabled": true
+      }
+    },
     "./tui": {
       "import": "./dist/four-opencode-brain-tui.jsx",
       "config": {
