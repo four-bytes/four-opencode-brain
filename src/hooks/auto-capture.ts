@@ -245,6 +245,8 @@ export async function onSessionIdle(
         review_state: "draft",
         confidence: 0.1,
       });
+      // Also store as memory for brain_memory search
+      try { memoryAdd(conn, { type: "decision", title: cd.context.slice(0, 80), content: cd.context }); } catch {}
 
       log("info", "autocapture", "auto-captured considered decision", { entryKey });
       consideredSaved++;

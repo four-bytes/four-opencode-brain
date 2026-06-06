@@ -88,7 +88,7 @@ export function memoryAdd(db: Database, entry: MemoryInput): MemoryEntry {
   const projectHash = hashContent(entry.project ?? "global");
   const contentHash = hashContent(entry.content);
 
-  db.run(
+  const result = db.run(
     `INSERT INTO memories (id, project_hash, date, type, tags, title, content, content_hash)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     [
@@ -102,6 +102,10 @@ export function memoryAdd(db: Database, entry: MemoryInput): MemoryEntry {
       contentHash,
     ],
   );
+
+  if (result.changes === 0) {
+    throw new Error("Memory not stored: duplicate content detected");
+  }
 
   return {
     id,
@@ -120,7 +124,7 @@ export function memoryAdd(db: Database, entry: MemoryInput): MemoryEntry {
 // ---------------------------------------------------------------------------
 
 export function memorySearch(db: Database, opts: SearchOpts): MemoryEntry[] {
-  if (!opts.query) return [];
+  if (!opts.query) throw new Error("query is required for memory search");
 
   let sql = `
     SELECT m.id, m.project_hash, m.date, m.type, m.tags, m.title, m.content, m.created_at,

@@ -435,21 +435,19 @@ const _serverPlugin = async (input: PluginInput) => {
             const forgetOk = memoryForget(db, args.id as string);
             updateStatus(forgetOk ? "success" : "error", { toast: forgetOk ? "Memory removed" : "Memory not found" });
             return JSON.stringify({ ok: forgetOk });
-          case "diary":
-            if (args.subMode === "add") {
-              if (!args.diaryTitle || !args.diaryContent) {
-                return JSON.stringify({ error: "diaryTitle and diaryContent required for subMode=add" });
-              }
-              diaryAdd(db, {
-                title: args.diaryTitle as string,
-                content: args.diaryContent as string,
-                date: args.diaryDate as string | undefined,
-              });
-              return JSON.stringify(diaryGet(db, (args.diaryDate as string) ?? new Date().toISOString().split("T")[0]));
+          case "diary": {
+            // Auto-detect: if title + content provided → add entry; otherwise → get
+            const diaryDate = (args.diaryDate as string) ?? (args.date as string) ?? new Date().toISOString().split("T")[0];
+            if (args.diaryTitle && args.diaryContent) {
+              diaryAdd(db, { title: args.diaryTitle, content: args.diaryContent, date: diaryDate });
+              return JSON.stringify(diaryGet(db, diaryDate));
             }
-            return JSON.stringify(
-              diaryGet(db, (args.date as string) ?? new Date().toISOString().split("T")[0]),
-            );
+            if (args.title && args.content) {
+              diaryAdd(db, { title: args.title, content: args.content, date: diaryDate });
+              return JSON.stringify(diaryGet(db, diaryDate));
+            }
+            return JSON.stringify(diaryGet(db, diaryDate));
+          }
           case "get": {
             const found = memoryGet(db, args.id as string);
             return JSON.stringify(found ?? { error: `Memory not found: ${args.id}` });
@@ -718,7 +716,9 @@ const _serverPlugin = async (input: PluginInput) => {
             text = texts.join("\n");
           }
         } catch (err) {
-          log("debug", "autocapture", "Failed to fetch session messages", { error: String(err) });
+          log("debug", "autocapture", "Failed to fetch session messages — using event summary", { error: String(err) });
+          // Fallback: use any available text from event properties
+          text = JSON.stringify(eventInput.event.properties ?? {});
         }
         if (text) {
           await onSessionIdle(input, text, undefined, input.client, sessionID);
