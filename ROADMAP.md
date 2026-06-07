@@ -296,10 +296,10 @@ Per P48 — Open Source Github Review Automation: CI, linters, and tests are alr
 - Require: conversation resolution before merge
 
 ### Acceptance Criteria (A7)
-- [ ] CI workflow runs on every PR (build + test)
-- [ ] cubic AI reviewer installed and active
-- [ ] Branch protection enforces both CI + AI review
-- [ ] No PR merges without passing gates
+- [x] CI workflow runs on every PR (build + test)
+- [x] cubic AI reviewer installed and active
+- [x] Branch protection enforces both CI + AI review
+- [x] No PR merges without passing gates
 
 ### Status
 
