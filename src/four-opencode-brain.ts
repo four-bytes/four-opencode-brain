@@ -135,8 +135,8 @@ const _serverPlugin = async (input: PluginInput) => {
         if (result.filesFound === 0) {
           const dirname = directory.split("/").filter(Boolean).pop() ?? directory;
           const msg = `🧠 Found 0 files in ${dirname} — check path`;
-          toast( msg.replace("🧠 ", ""), "warning", "Brain 🧠");
           updateStatus("warning", { toast: msg.replace("🧠 ", "") });
+          toast( msg.replace("🧠 ", ""), "warning", "Brain 🧠");
           log("warn", "auto-ingest", msg, {
             filesFound: result.filesFound,
             filesSkipped: result.filesSkipped,
@@ -147,8 +147,8 @@ const _serverPlugin = async (input: PluginInput) => {
           });
         } else {
           const msg = `🧠 Indexed ${result.filesIndexed} new, ${result.filesSkipped} skipped in ${(result.durationMs / 1000).toFixed(1)}s`;
-          toast( msg.replace("🧠 ", ""), "success", "Brain 🧠");
           updateStatus("success", { toast: msg.replace("🧠 ", "") });
+          toast( msg.replace("🧠 ", ""), "success", "Brain 🧠");
           log("info", "auto-ingest", msg, {
             filesFound: result.filesFound,
             filesIndexed: result.filesIndexed,
@@ -161,13 +161,13 @@ const _serverPlugin = async (input: PluginInput) => {
       } catch (err) {
         if (err instanceof TimeoutError) {
           const msg = `🧠 Auto-ingest timed out after ${(timeoutMs / 1000).toFixed(0)}s — partial results`;
-          toast( msg.replace("🧠 ", ""), "warning", "Brain 🧠");
           updateStatus("warning", { toast: msg.replace("🧠 ", "") });
+          toast( msg.replace("🧠 ", ""), "warning", "Brain 🧠");
           log("warn", "auto-ingest", msg, { directory, timeoutMs });
         } else {
           const errMsg = `🧠 Auto-ingest failed: ${String(err)}`;
+          updateStatus("error", { toast: errMsg.replace("🧠 ", "") });
           toast( errMsg.replace("🧠 ", ""), "error", "Brain 🧠");
-          updateStatus("warning", { toast: msg.replace("🧠 ", "") });
           log("error", "auto-ingest", errMsg);
         }
       } finally {
