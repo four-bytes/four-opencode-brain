@@ -8,6 +8,13 @@
 
 ## Features
 
+- **Hybrid Search** — FTS5 full-text + vec0 vector search with RRF fusion
+- **Memory** — Session-scoped notes, decisions, patterns, errors, diary entries
+- **Knowledge Base** — Problem-centric entries with confidence gating and review lifecycle
+- **Auto-Ingest** — Indexes project files on startup (git repos only)
+- **TUI Status Bar** — Live spinner, progress, and completion indicators
+- **Content-Hash Dedup** — Skips unchanged files automatically
+
 ## Installation
 
 ```bash
