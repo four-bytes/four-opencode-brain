@@ -129,7 +129,7 @@ function BrainStatusBar(props: { centered?: boolean; api: TuiPluginApi }) {
 
 const tui: TuiPlugin = (api) => {
   api.slots.register({
-    order: 999,
+    order: 60, // below deepseek-meter (55)
     slots: {
       sidebar_content: () => <BrainStatusBar api={api} />,
       home_bottom: () => <BrainStatusBar api={api} centered />,
