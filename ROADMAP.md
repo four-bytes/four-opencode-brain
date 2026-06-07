@@ -1,194 +1,135 @@
 # four-opencode-brain — Evolution Roadmap
 
-> Canonical plan for eliminating duplication, hardening reliability, and preparing for open source.
+> Canonical plan for eliminating duplication, extracting atomic modules, and hardening reliability.
 
-## Wave Ordering
+## Wave Ordering (Revised)
 
 ```
-A2 (dedup elimination) → A1 (lib extraction) → A4 (unified status) → A5 (open-source readiness) → A6 (memory fixes)
+A2 (atomic dedup + module extraction) → A5 (open-source readiness) → A6 (memory fixes) → A7+ (further)
 ```
 
-**A3 is obsolete** — blocked-directory scanning has no bug; the recent `scanning: false` fix (#47) resolved the spinner-stuck issue.
+**A4 is done** — unified `updateStatus()` with session-scoped status files (#69, #70).  
+**A3 is obsolete** — no blocked-directory scanning bug.  
+**A1 is merged into A2** — library extraction now part of the atomic module plan.
 
 ---
 
-## Wave A2 — Eliminate opencode Duplication (FIRST)
+## Wave A2 — Atomic Dedup + Module Extraction (FIRST)
 
-> Priority: HIGH. This makes A1 simpler and removes the most technical debt.
+> Priority: HIGH. Eliminates duplication, extracts reusable npm packages, makes the codebase modular.
 
 ### Background
-Brain duplicates several patterns that opencode already provides natively:
 
-| Duplicated Pattern | Brain Implementation | opencode Native |
-|---|---|---|
-| Spinner | Handwritten braille array `["⠋","⠙",…]` | `<Spinner>` SolidJS component (`packages/opencode/src/cli/cmd/tui/component/spinner.tsx`) |
-| Status bar | Polling HTTP at 200ms (`Bun.serve :16936`) | Reactive `RunFooter` + `TuiEventBus` |
-| Color constants | Hardcoded `RED`, `ORANGE`, `YELLOW`, `GREEN`, `MUTED` | `api.theme` RGBA values |
-| Progress reporting | `writeStatus()` → file + in-memory → HTTP endpoint → poll | `api.ui.toast()` + `TuiEventBus.publish()` |
+Brain currently has two types of duplication:
+1. **opencode-native duplication** — spinner array, hardcoded colors (can use opencode's built-in components)
+2. **Monolith architecture** — single package with 4 engines (ingest, search, memory, knowledge) + TUI + hooks, making it hard to reuse individual engines
 
-### Tasks
+### A2 subdivided into two phases:
 
-#### A2.1 — Replace polling HTTP with TuiEventBus
-**Goal:** Eliminate the `Bun.serve` HTTP server on port 16936 and use opencode's event bus for backend→TUI communication.
+#### Phase 1: Spinner/Color Dedup (A2.1–A2.3)
 
-- [ ] Remove `Bun.serve({ port: 16936, … })` from `src/four-opencode-brain.ts` (lines 106–121)
-- [ ] Remove `STATUS_FILE`, `writeStatus()`, `clearStatus()`, `currentStatus` (lines 72–94)
-- [ ] Add `api.event.publish('brain:status', { phase, … })` at every status transition
-- [ ] Update `src/tui.tsx` to subscribe to `api.event.on('brain:status', handler)` instead of polling `fetch(STATUS_URL)`
-- [ ] Remove `STATUS_URL`, `POLL_MS`, `setInterval` polling loop from `tui.tsx`
-- [ ] **Verification:** Status-bar updates in real time; no port 16936 listener
+| # | Task | Current | Target |
+|---|------|---------|--------|
+| A2.1 | Replace file polling with TuiEventBus | `setInterval(poll, 200ms)` reading status JSON file | `api.event.on('brain:status', handler)` — push-based |
+| A2.2 | Use opencode `<Spinner>` | Handwritten braille `["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"]` + manual `spin++` | Import `<Spinner>` from opencode TUI |
+| A2.3 | Use `api.theme` colors | Hardcoded `setFg(GREEN)`, `setFg(RED)`, `setFg(YELLOW)` | `theme().success`, `theme().error`, `theme().warning` |
 
-#### A2.2 — Use opencode `<Spinner>` component
-**Goal:** Drop the handwritten braille spinner array; import opencode's native component.
+#### Phase 2: Atomic Module Extraction (A2.4)
 
-- [ ] Remove `const SPINNER = ["⠋","⠙",…]` from `src/tui.tsx`
-- [ ] Import `Spinner` from `@opencode-ai/plugin/tui` (or wherever opencode exposes it)
-- [ ] Replace manual `setIndicator(SPINNER[spin % SPINNER.length])` with `<Spinner />`
-- [ ] **Verification:** Spinner looks and animates identically to opencode's native spinners
+Each engine becomes its own npm package under `@four-bytes/` scope:
 
-#### A2.3 — Use `api.theme` instead of hardcoded colors
-**Goal:** Remove `RED`, `ORANGE`, `YELLOW`, `GREEN`, `MUTED`, `BRIGHT` constants.
-
-- [ ] Replace `setFg(GREEN)` with `api.theme.success` or equivalent
-- [ ] Replace `setFg(RED)` with `api.theme.error` or equivalent
-- [ ] Replace `fg={MUTED}` with theme.muted equivalent
-- [ ] **Verification:** Colors match the user's opencode theme
-
-#### A2.4 — Remove `writeStatus()` → replace with unified function (A4)
-**Goal:** After A2.1–A2.3, `writeStatus()` is dead code. Replace it with the unified `updateStatus()` function designed in Wave A4.
-
-- [ ] Make `writeStatus` private/internal, renamed to `updateStatus`
-- [ ] Wire all call sites to the new function
-- [ ] **Verification:** Same or better status-bar responsiveness
-
-### Acceptance Criteria (A2)
-- [ ] No HTTP server on port 16936
-- [ ] No handwritten spinner array in brain code
-- [ ] No hardcoded color constants
-- [ ] No polling loop in TUI
-- [ ] Status bar responds to opencode event bus
-
----
-
-## Wave A1 — Extract `@four-bytes/opencode-plugin-lib`
-
-> Priority: MEDIUM. Public npm package. Only extract patterns NOT provided by opencode.
-
-### Library Scope (post-A2)
-
-After A2 eliminates duplication, only **one** pattern remains to extract:
-
-| Pattern | Extract? | Reason |
-|---------|----------|--------|
-| Toast Wrapper | **YES** | Thin wrapper around `client.tui.showToast()` with error swallowing — useful for all plugins |
-| Spinner | **NO** | opencode provides `<Spinner>` natively |
-| Status bar | **NO** | opencode provides `RunFooter` + event bus |
-| Polling helper | **NO** | Replaced by event bus in A2 |
-| Status-update function | **NO** | Brain-specific (see A4); expose from lib only as optional utility |
-
-### Tasks
-
-#### A1.1 — Create repo `four-bytes/four-opencode-plugin-lib`
-- [ ] Create GitHub repo (public, Apache-2.0)
-- [ ] Initialize with `package.json` (`@four-bytes/opencode-plugin-lib`, ESM, Bun-targeted, strict TS)
-- [ ] Set up build pipeline (Bun build, tsc for TUI types)
-- [ ] Add AGENTS.md, CLAUDE.md
-
-#### A1.2 — Extract Toast Wrapper
-- [ ] Move `showToast()` pattern from `four-opencode-brain/src/four-opencode-brain.ts` (lines 42–53) into lib
-- [ ] Export as `createToast(client, pluginName)` — returns `(message, variant, title?) => void`
-- [ ] Handle all error cases silently (never break plugin on toast failure)
-- [ ] **Verification:** Brain and deepseek-meter both use the lib's toast wrapper
-
-#### A1.3 — Refactor brain to consume lib
-- [ ] Add `@four-bytes/opencode-plugin-lib` as dependency
-- [ ] Replace inline `showToast()` with `createToast(client, 'Brain 🧠')`
-- [ ] **Verification:** Toasts appear identically, no regressions
-
-### Acceptance Criteria (A1)
-- [ ] `@four-bytes/opencode-plugin-lib` published to npm (public)
-- [ ] Toast wrapper extracted and reusable
-- [ ] Brain plugin consumes lib (no breaking changes)
-
----
-
-## Wave A3 — Blocked Directory Scanning
-
-> **OBSOLETE — NO BUG.** Confirmed by exhaustive trace analysis (see research log).
-
-The `shouldSkip` guard at `four-opencode-brain.ts:145` correctly prevents all file scanning on blocked directories. The recent `scanning: false` fix (#47) resolved the only related issue (spinner stuck after fast finish).
-
-**No tasks. Skipped.**
-
----
-
-## Wave A4 — Unified Status-Update Function
-
-> Priority: MEDIUM. Every DB/file/LLM operation should show busy→done lifecycle.
-
-### Problem
-Only `brain_ingest` and `brain_search` update the TUI status bar. Eight other tool paths are completely silent, including the heavy `brain_reindex` (drops + recreates vec0 table, re-embeds all chunks).
-
-### Design: Single `updateStatus()` function
-
-```typescript
-type StatusState = 'busy' | 'success' | 'warning' | 'error' | 'ready';
-type StatusOptions = {
-  text?: string;          // Status-bar text
-  toast?: string;         // Optional toast message
-  toastVariant?: 'info' | 'success' | 'warning' | 'error';
-};
-
-function updateStatus(state: StatusState, opts?: StatusOptions): void {
-  // Spinner + text for 'busy'
-  // Green dot + text for 'success'  
-  // Yellow dot for 'warning'
-  // Red dot for 'error'
-  // Green dot, no text for 'ready'
-  // Optional toast via createToast()
-}
+```
+@four-bytes/brain-core              — DB schema init, LRU cache, logger, shared utils
+@four-bytes/brain-ingest            — File walker, content-hash dedup, chunker, embed pipeline
+@four-bytes/brain-search            — FTS5+vec0 hybrid search, query parser, FTS sanitizer
+@four-bytes/brain-memory            — Memory CRUD (add/search/list/forget) + diary
+@four-bytes/brain-knowledge         — KB entries, confidence gating, REGATE lifecycle
+@four-bytes/brain-hooks             — System prompt generator, auto-capture triggers
+@four-bytes/brain-tui               — SolidJS BrainStatusBar component, spinner/color integration
+@four-bytes/opencode-plugin-lib     — Toast wrapper (createToast), shared plugin utilities
 ```
 
-### TUI Mapping
+The main `@four-bytes/four-opencode-brain` becomes a thin **composer** that imports all modules and wires them together:
 
-| `updateStatus()` call | Indicator | Color | Toast? |
-|---|---|---|---|
-| `updateStatus('busy', { text: 'Indexing…' })` | Spinner | Theme accent | No |
-| `updateStatus('busy', { text: 'Searching…' })` | Spinner | Theme accent | No |
-| `updateStatus('success', { text: 'Done', toast: 'Indexed 42 files' })` | • | Green | Yes |
-| `updateStatus('warning', { text: 'Timeout', toast: 'Partial results' })` | • | Yellow | Yes |
-| `updateStatus('error', { text: 'Failed', toast: 'Error: …' })` | • | Red | Yes |
-| `updateStatus('ready')` | • | Green | No |
+```typescript
+// four-opencode-brain.ts (post-extraction)
+import { initBrainDatabase } from "@four-bytes/brain-core";
+import { ingestPath } from "@four-bytes/brain-ingest";
+import { brainSearch } from "@four-bytes/brain-search";
+import { memoryAdd, memorySearch } from "@four-bytes/brain-memory";
+import { kbAdd, kbSearch } from "@four-bytes/brain-knowledge";
+import { brainSystemPrompt } from "@four-bytes/brain-hooks";
+import { createToast } from "@four-bytes/opencode-plugin-lib";
+import { BrainStatusBar } from "@four-bytes/brain-tui";
+```
+
+#### Extraction Order (dependency-driven)
+
+```
+1. opencode-plugin-lib  →  Toast wrapper (no deps)
+2. brain-core           →  Schema, cache, logger, shared (no deps)
+3. brain-ingest         →  Depends on core (DB, cache)
+4. brain-search         →  Depends on core (DB)
+5. brain-memory         →  Depends on core (DB)
+6. brain-knowledge      →  Depends on core (DB)
+7. brain-hooks          →  Depends on memory + knowledge
+8. brain-tui            →  Depends on core (project-agnostic)
+9. four-opencode-brain  →  Composer (depends on all)
+```
 
 ### Tasks
 
-#### A4.1 — Implement `updateStatus()` function
-- [ ] Create `src/status.ts` with the function + types
-- [ ] Wire into TUI via event bus (publish `brain:status` events)
-- [ ] TUI subscribes and maps state → indicator/color/text/toast
+#### A2.1 — Replace file polling with TuiEventBus
+- [ ] In `src/status.ts`: `publishBrainEvent('brain:status', payload)` instead of `writeFileSync()`
+- [ ] In `src/tui.tsx`: subscribe to `api.event.on('brain:status', handler)` instead of `setInterval(poll, 200ms)`
+- [ ] Remove `POLL_MS`, `setInterval`, `onCleanup(clearInterval)` polling loop
+- [ ] Remove file-based `writeFileSync` / `readFile` status mechanism
+- [ ] **Verification:** Status bar updates in real time; no file I/O for status
 
-#### A4.2 — Wire all tool paths
-- [ ] `brain_reindex`: `busy('Rebuilding index…')` → `success('Done', toast)`
-- [ ] `brain_memory/add`: `busy('Storing…')` → `success('Stored', toast)` or `error`
-- [ ] `brain_memory/forget`: `busy('Removing…')` → `success('Removed')` or `error`
-- [ ] `brain_memory/diary:add`: `busy('Saving…')` → `success('Saved')`
-- [ ] `brain_kb_add`: `busy('Saving entry…')` → `success('Entry saved')`
-- [ ] `brain_kb_record`: `busy('Recording…')` → `success('Recorded')`
-- [ ] `brain_kb_review`: `busy('Updating…')` → `success('Updated')`
-- [ ] `brain_kb_stats`: brief `busy('Querying…')` → `ready()`
-- [ ] `chat.message` hook: silent (no spinner — too frequent)
-- [ ] `session.idle` hook: silent (no spinner — background)
+#### A2.2 — Use opencode `<Spinner>` component
+- [ ] Remove `const SPINNER = ["⠋","⠙",…]` + `spin` variable from `tui.tsx`
+- [ ] Use opencode's `<Spinner />` component (verify import path from `@opencode-ai/plugin/tui`)
+- [ ] Wire spinner visibility to `data.phase === 'busy'` or equivalent
+- [ ] **Verification:** Spinner animates identically to opencode's native spinners
 
-#### A4.3 — Refactor existing status paths
-- [ ] Replace `brain_ingest` direct `writeStatus` calls with `updateStatus`
-- [ ] Replace `brain_search` direct `writeStatus` calls with `updateStatus`
-- [ ] **Verification:** All operations show busy spinner → finish indicator
+#### A2.3 — Use `api.theme` colors
+- [ ] Replace all `setFg(GREEN)` / `setFg(RED)` / `setFg(YELLOW)` with theme equivalents
+- [ ] Map: GREEN → `theme().success`, RED → `theme().error`, YELLOW/ORANGE → `theme().warning`
+- [ ] Map: MUTED → `theme().textMuted`, accent pulse → `theme().accent`
+- [ ] Remove hardcoded color constants
+- [ ] **Verification:** Colors match the user's opencode theme
 
-### Acceptance Criteria (A4)
-- [ ] Every tool execution shows spinner while working
-- [ ] Spinner resolves to success/warning/error indicator
-- [ ] Optional toast on completion
-- [ ] No regression in existing ingest/search status display
+#### A2.4 — Extract atomic npm packages
+- [ ] **A2.4a** — Extract `@four-bytes/opencode-plugin-lib` (toast wrapper)
+- [ ] **A2.4b** — Extract `@four-bytes/brain-core` (schema, cache, logger, shared)
+- [ ] **A2.4c** — Extract `@four-bytes/brain-ingest` (walker, chunker, embed, dedup)
+- [ ] **A2.4d** — Extract `@four-bytes/brain-search` (FTS5+vec0, query parser)
+- [ ] **A2.4e** — Extract `@four-bytes/brain-memory` (CRUD + diary)
+- [ ] **A2.4f** — Extract `@four-bytes/brain-knowledge` (KB, confidence, REGATE)
+- [ ] **A2.4g** — Extract `@four-bytes/brain-hooks` (system prompt, auto-capture)
+- [ ] **A2.4h** — Extract `@four-bytes/brain-tui` (BrainStatusBar + spinner)
+- [ ] **A2.4i** — Refactor `@four-bytes/four-opencode-brain` as composer
+- [ ] **Verification:** All tests pass; plugin behavior identical; each module independently publishable
+
+### Acceptance Criteria (A2)
+- [ ] No handwritten spinner array in brain code
+- [ ] No hardcoded color constants — uses `api.theme`
+- [ ] No polling loop in TUI — uses TuiEventBus
+- [ ] All 8 sub-packages extracted and independently buildable
+- [ ] `four-opencode-brain` composer passes all tests
+- [ ] Each package has its own `package.json`, `tsconfig.json`, build script
+
+---
+
+## Wave A4 — Unified Status-Update Function ✅
+
+> **DONE (#69, #70).** Single `updateStatus()` function with directory-scoped status files.
+>
+> **What was built:**
+> - `src/status.ts` — `updateStatus(state, opts?)` supporting busy/success/warning/error/ready
+> - Session-scoped status files via `getBrainStatusFile(directory)` (MD5-hash)
+> - Wired to all 10 tool paths (ingest, search, reindex, memory, KB operations)
+> - TUI polls per-directory file via `api.state.path.directory`
 
 ---
 
@@ -262,7 +203,7 @@ function updateStatus(state: StatusState, opts?: StatusOptions): void {
 - [ ] Match old plugin's behavior
 
 #### A6.3 — Fix diary resilience (Fix #4)
-- [ ] In `event` hook handler (`four-opencode-brain.ts:738–767`):
+- [ ] In `event` hook handler:
   - [ ] If `client.session.messages()` fails → fall back to `eventInput.event.properties` text
   - [ ] Log warning but still attempt `onSessionIdle`
 - [ ] Ensure diary entries are always created on session idle
@@ -294,23 +235,20 @@ function updateStatus(state: StatusState, opts?: StatusOptions): void {
 
 ---
 
-## Dependency Graph
+## Dependency Graph (Revised)
 
 ```
-A2 (dedup elimination)
- ├─► A1 (lib extraction) — only Toast Wrapper remains
- │    └─► A4 (unified status) — uses event bus from A2 + wrapper from A1
- │         └─► A6 (memory fixes) — uses updateStatus from A4
- └─► A5 (open-source) — independent, can run in parallel
+A2 (atomic dedup + modules)
+ ├─► A5 (open-source readiness) — independent, can run in parallel with A2 phase 1
+ └─► A6 (memory fixes) — uses modules from A2
 ```
 
 ## Execution Order
 
-1. **A2** → Remove polling HTTP, spinner, hardcoded colors → use opencode native APIs
-2. **A1** → Extract Toast Wrapper to `@four-bytes/opencode-plugin-lib` (public npm)
-3. **A4** → Unified `updateStatus()` function, wire to all tool paths
-4. **A5** → README, CONTRIBUTING, issue templates, repo polish (can parallelize with A4)
-5. **A6** → Fix memory dedup, search, diary, migration script
+1. **A2 Phase 1** → Replace spinner, colors, polling with opencode-native APIs
+2. **A2 Phase 2** → Extract 8 atomic npm packages + refactor composer
+3. **A5** → README, CONTRIBUTING, issue templates, repo polish (parallelizable with A2 phase 2)
+4. **A6** → Fix memory dedup, search, diary, migration script
 
 ---
 
@@ -318,9 +256,14 @@ A2 (dedup elimination)
 
 | Wave | Status | Issue |
 |------|--------|-------|
-| A2 | Pending | — |
-| A1 | Pending | #49 |
-| A3 | **Obsolete** | — |
-| A4 | Pending | — |
+| A2 | Pending | #71 |
+| A4 | ✅ **Done** | #69, #70 |
 | A5 | Pending | — |
 | A6 | Pending | — |
+
+## Historical (Completed/Obsolte)
+
+| Wave | Status | Issue |
+|------|--------|-------|
+| A1 | Merged into A2 | #49 |
+| A3 | **Obsolete** | — |
