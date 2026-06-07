@@ -267,3 +267,42 @@ A2 (atomic dedup + modules)
 |------|--------|-------|
 | A1 | Merged into A2 | #49 |
 | A3 | **Obsolete** | — |
+
+---
+
+## Wave A7 — Gatekeeping & Review Automation
+
+> Priority: HIGH. Automated quality gates + AI code review for every PR.
+
+### Background
+
+Per P48 — Open Source Github Review Automation: CI, linters, and tests are already solid. Adding an AI reviewer + quality gate pattern on top ensures every PR is automatically reviewed before merge.
+
+### Setup
+
+#### A7.1 — CI Workflow (GitHub Actions)
+- ✅ `.github/workflows/ci.yml` — builds + runs 247 tests on every PR
+- Trigger: `pull_request` (opened, reopened, synchronize, ready_for_review) + `push: main`
+
+#### A7.2 — AI Reviewer (cubic GitHub App)
+- Install [cubic GitHub App](https://github.com/apps/cubic-dev-ai) on the repo
+- Automatic PR review per commit, inline comments, summary
+- Model: same as dagu reference implementation
+
+#### A7.3 — Branch Protection (Quality Gates)
+- Require: `Build & Test` (CI workflow) — **blocking**
+- Require: `cubic AI review` — **blocking from start**
+- Require: at least 1 human review
+- Require: conversation resolution before merge
+
+### Acceptance Criteria (A7)
+- [ ] CI workflow runs on every PR (build + test)
+- [ ] cubic AI reviewer installed and active
+- [ ] Branch protection enforces both CI + AI review
+- [ ] No PR merges without passing gates
+
+### Status
+
+| Wave | Status | Issue |
+|------|--------|-------|
+| A7 | 🔄 In Progress | — |
