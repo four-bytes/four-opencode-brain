@@ -48,5 +48,6 @@ export function log(
 
   if (level === "error") console.error(line);
   else if (level === "warn") console.warn(line);
+  else if (level === "debug") console.error(line);
   else console.log(line);
 }
