@@ -292,6 +292,12 @@ export function kbRecord(db: Database, input: KbRecordInput): KbOccurrence {
     throw new Error(`Entry not found: ${input.entry_key} (kind: ${input.kind})`);
   }
 
+  // Validate outcome
+  const VALID_OUTCOMES = ["fixed", "failed", "workaround", "observed"];
+  if (!VALID_OUTCOMES.includes(input.outcome)) {
+    throw new Error(`Invalid outcome: "${input.outcome}". Must be one of: ${VALID_OUTCOMES.join(", ")}`);
+  }
+
   const id = generateId();
   db.run(
     `INSERT INTO knowledge_occurrences (id, entry_key, kind, project_ref, repo_ref, issue_ref, commit_ref, observed_symptoms, outcome)
