@@ -136,9 +136,8 @@ describe("memorySearch", () => {
     expect(typeFiltered.length).toBe(0);
   });
 
-  test("returns empty array when no query provided", () => {
-    const results = memorySearch(db, {});
-    expect(results.length).toBe(0);
+  test("throws when no query provided", () => {
+    expect(() => memorySearch(db, {})).toThrow("query is required");
   });
 });
 

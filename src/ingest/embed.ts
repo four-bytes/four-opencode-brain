@@ -13,6 +13,7 @@ import type { Database } from "bun:sqlite";
 import { hashContent } from "../schema";
 import { sessionCache } from "../cache";
 import { log } from "../logger";
+import { loadVec0 } from "../embed/extensionLoader";
 import { EmbeddingService } from "../embed/embeddingService";
 
 // ---------------------------------------------------------------------------
