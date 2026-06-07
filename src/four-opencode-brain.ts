@@ -52,7 +52,7 @@ function calculateIngestTimeout(fileCount: number): number {
 }
 
 /** Unified status updates — see src/status.ts */
-import { updateStatus, initStatus, toast } from "./status";
+import { updateStatus, initStatus, initVersion } from "./status";
 
 
 
@@ -61,6 +61,7 @@ const _serverPlugin = async (input: PluginInput) => {
 
   sessionCache.reset();
   initStatus(client);
+  initVersion(VERSION);
   log("info", "init", `v${VERSION} loaded`, { pid: process.pid });
   setSilent(true); // suppress all subsequent console output
 
