@@ -1,14 +1,31 @@
-// Re-exported from @four-bytes/opencode-plugin-lib
-// Console output removed — opencode TUI already captures stdout.
-// Structured JSONL logging enabled via CC_DEBUG=true.
-import { createJsonlLogger } from "@four-bytes/opencode-plugin-lib";
+// ---------------------------------------------------------------------------
+// Throttled, rate-limited console logger — captured by opencode session log
+// ---------------------------------------------------------------------------
 
 type LogLevel = "debug" | "info" | "warn" | "error";
 
-const jsonl = createJsonlLogger("four-opencode-brain");
+interface ThrottleState {
+  lastCall: number;
+  count: number;
+}
 
-/** No-op — JSONL logger is opt-in via CC_DEBUG. Kept for API compat. */
-export function setSilent(_val: boolean): void {}
+const throttles = new Map<string, ThrottleState>();
+let silent = false;
+
+function shouldLog(key: string, intervalMs: number = 60000): boolean {
+  const now = Date.now();
+  const state = throttles.get(key);
+  if (!state || now - state.lastCall > intervalMs) {
+    throttles.set(key, { lastCall: now, count: 1 });
+    return true;
+  }
+  state.count++;
+  return false;
+}
+
+export function setSilent(val: boolean): void {
+  silent = val;
+}
 
 export function log(
   level: LogLevel,
@@ -16,5 +33,20 @@ export function log(
   msg: string,
   data?: Record<string, unknown>,
 ): void {
-  jsonl(`${level}.${key}`, { msg, ...(data ?? {}) });
+  if (level === "debug" && process.env.BRAIN_DEBUG !== "true") return;
+
+  if (level === "warn" || level === "info") {
+    if (!shouldLog(key, 60000)) return;
+  }
+
+  if (silent && level !== "error") return;
+
+  const timestamp = new Date().toISOString();
+  const prefix = `[brain] ${timestamp} ${level.toUpperCase()} ${key}`;
+  const payload = data ? ` ${JSON.stringify(data)}` : "";
+  const line = `${prefix} ${msg}${payload}`;
+
+  if (level === "error") console.error(line);
+  else if (level === "warn") console.warn(line);
+  else console.log(line);
 }
