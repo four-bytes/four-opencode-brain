@@ -19,11 +19,14 @@ export interface StatusOpts {
 }
 
 /** Merged state — written to file on every update */
-let currentStatus: Record<string, unknown> = { phase: "init" };
+let currentStatus: Record<string, unknown> = { phase: "init", version: "" };
+let _version = "";
 
 let toastFn: ReturnType<typeof createToast> | null = null;
 
 /** Initialize with client for toast support */
+export function initVersion(v: string): void { _version = v; }
+
 export function initStatus(client: PluginInput["client"]): void {
   toastFn = createToast(client, "Brain 🧠");
 }
@@ -33,7 +36,7 @@ function write(data: Record<string, unknown>): void {
   try {
     const dir = BRAIN_STATUS_FILE.replace(/\/[^/]+$/, "");
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    writeFileSync(BRAIN_STATUS_FILE, JSON.stringify({ ...currentStatus, updated: Date.now() }));
+    writeFileSync(BRAIN_STATUS_FILE, JSON.stringify({ ...currentStatus, version: _version, updated: Date.now() }));
   } catch {
     // never crash on status file failure
   }
