@@ -1,7 +1,7 @@
 import { createToast } from "./toast";
 import type { PluginInput } from "@opencode-ai/plugin";
 import { writeFileSync, mkdirSync, existsSync } from "fs";
-import { BRAIN_STATUS_FILE } from "./shared";
+import { getBrainStatusFile } from "./shared";
 
 export type StatusState = "busy" | "success" | "warning" | "error" | "ready";
 
@@ -21,22 +21,24 @@ export interface StatusOpts {
 /** Merged state — written to file on every update */
 let currentStatus: Record<string, unknown> = { phase: "init", version: "" };
 let _version = "";
+let _statusFile = "";
 
 let toastFn: ReturnType<typeof createToast> | null = null;
 
-/** Initialize with client for toast support */
+/** Initialize with client for toast support and directory for session-scoped status file */
 export function initVersion(v: string): void { _version = v; }
 
-export function initStatus(client: PluginInput["client"]): void {
+export function initStatus(client: PluginInput["client"], directory: string): void {
   toastFn = createToast(client, "Brain 🧠");
+  _statusFile = getBrainStatusFile(directory);
 }
 
 function write(data: Record<string, unknown>): void {
   currentStatus = { ...currentStatus, ...data };
   try {
-    const dir = BRAIN_STATUS_FILE.replace(/\/[^/]+$/, "");
+    const dir = _statusFile.replace(/\/[^/]+$/, "");
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    writeFileSync(BRAIN_STATUS_FILE, JSON.stringify({ ...currentStatus, version: _version, updated: Date.now() }));
+    writeFileSync(_statusFile, JSON.stringify({ ...currentStatus, version: _version, updated: Date.now() }));
   } catch {
     // never crash on status file failure
   }

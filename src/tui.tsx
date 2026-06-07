@@ -3,7 +3,7 @@
 import { createSignal, onMount, onCleanup } from "solid-js";
 import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui";
 import type { RGBA } from "@opentui/core";
-import { BRAIN_STATUS_FILE } from "./shared";
+import { getBrainStatusFile } from "./shared";
 
 const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const POLL_MS = 200;
@@ -37,7 +37,8 @@ function BrainStatusBar(props: { centered?: boolean; api: TuiPluginApi }) {
 
   const poll = async () => {
     try {
-      const file = Bun.file(BRAIN_STATUS_FILE);
+      const statusFile = getBrainStatusFile(props.api.state.path.directory);
+      const file = Bun.file(statusFile);
       if (!(await file.exists())) return;
       const data: BrainStatus = await file.json();
       setVersion(data.version ?? "");
