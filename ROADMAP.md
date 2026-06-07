@@ -256,10 +256,10 @@ A2 (atomic dedup + modules)
 
 | Wave | Status | Issue |
 |------|--------|-------|
-| A2 | Pending | #71 |
+| A2 | ✅ Done | #71, #76 |
 | A4 | ✅ **Done** | #69, #70 |
-| A5 | Pending | — |
-| A6 | Pending | — |
+| A5 | ✅ Done | #85 |
+| A6 | ✅ Done | #86 |
 
 ## Historical (Completed/Obsolte)
 
