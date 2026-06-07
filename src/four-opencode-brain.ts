@@ -53,6 +53,7 @@ function calculateIngestTimeout(fileCount: number): number {
 }
 
 /** Unified status updates — see src/status.ts */
+import { createToast } from "@four-bytes/opencode-plugin-lib";
 import { updateStatus, initStatus, initVersion } from "./status";
 
 
@@ -63,9 +64,7 @@ const _serverPlugin = async (input: PluginInput) => {
   sessionCache.reset();
   initStatus(client, directory);
   initVersion(VERSION);
-  const toast = (msg: string, variant?: string, _title?: string) => {
-    try { client.tui.showToast({ body: { message: msg, variant: (variant as any) ?? "info", title: "Brain 🧠" } }).catch(() => {}); } catch {}
-  };
+  const toast = createToast(client, "Brain 🧠"); // replaced inline with @four-bytes/opencode-plugin-lib
   log("info", "init", `v${VERSION} loaded`, { pid: process.pid });
   setSilent(true); // suppress all subsequent console output
 

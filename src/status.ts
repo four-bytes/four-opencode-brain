@@ -1,4 +1,4 @@
-import { createToast } from "./toast";
+import { createToast } from "@four-bytes/opencode-plugin-lib";
 import type { PluginInput } from "@opencode-ai/plugin";
 import { writeFileSync, mkdirSync, existsSync } from "fs";
 import { getBrainStatusFile } from "./shared";

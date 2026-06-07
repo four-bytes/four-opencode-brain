@@ -12,7 +12,7 @@ import { log } from "../logger";
 /**
  * TUI toast notification — silently handles all errors.
  */
-import { createToast } from "../toast";
+import { createToast } from "@four-bytes/opencode-plugin-lib";
 
 // ---------------------------------------------------------------------------
 // Constants
