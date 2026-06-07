@@ -4,6 +4,7 @@
 
 [![npm](https://img.shields.io/npm/v/@four-bytes/four-opencode-brain)](https://www.npmjs.com/package/@four-bytes/four-opencode-brain)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
+[![Version](https://img.shields.io/badge/version-1.3.0-blue)](https://github.com/four-bytes/four-opencode-brain/releases)
 
 ## Features
 
@@ -77,4 +78,4 @@ src/
 
 ## License
 
-Apache-2.0 © four-bytes
+Apache-2.0 © [Four Bytes / Four Flames GmbH & Co. KG](https://fourbytes.de)
