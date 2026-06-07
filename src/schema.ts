@@ -347,8 +347,8 @@ export function createSchema(db: Database): void {
       root_cause        TEXT,
       canonical_solution TEXT,
       tags              TEXT,
-      confidence        REAL NOT NULL DEFAULT 0.0,
-      review_state      TEXT NOT NULL DEFAULT 'draft',
+      confidence        REAL NOT NULL DEFAULT 0.0 CHECK(confidence >= 0.0 AND confidence <= 1.0),
+      review_state      TEXT NOT NULL DEFAULT 'draft' CHECK(review_state IN ('draft','reviewed','accepted','rejected','superseded')),
       superseded_by     TEXT,
       created_at        TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at        TEXT,
@@ -357,6 +357,10 @@ export function createSchema(db: Database): void {
   `);
 
   // ---- Migration: add entity_type CHECK for existing databases -----------
+  migrateConfidenceCheck(db);
+  migrateReviewStateCheck(db);
+  migrateOccurrenceOutcomeCheck(db);
+  migrateKnowledgeFts(db);
   migrateEntityTypeCheck(db);
 
   db.exec(`
@@ -369,7 +373,7 @@ export function createSchema(db: Database): void {
       issue_ref         TEXT,
       commit_ref        TEXT,
       observed_symptoms TEXT,
-      outcome           TEXT NOT NULL,
+      outcome           TEXT NOT NULL CHECK(outcome IN ('fixed','failed','workaround','observed')),
       occurred_at       TEXT NOT NULL DEFAULT (datetime('now')),
       FOREIGN KEY (entry_key, kind) REFERENCES knowledge_entries(entry_key, kind) ON DELETE CASCADE
     )
@@ -696,6 +700,168 @@ function migrateEntityTypeCheck(db: Database): void {
       } else {
         log("warn", "schema", `entity_type CHECK migration deferred (DB locked after 3 attempts): ${String(err)}`);
         // Non-fatal — migration will retry on next initBrainDatabase()
+      }
+    }
+  }
+}
+
+// ---- KB quality migration: confidence CHECK constraint ------------------
+
+function migrateConfidenceCheck(db: Database): void {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      db.exec(`
+        CREATE TRIGGER IF NOT EXISTS knowledge_entries_check_confidence_bi
+        BEFORE INSERT ON knowledge_entries
+        BEGIN
+          SELECT CASE
+            WHEN NEW.confidence < 0.0 OR NEW.confidence > 1.0
+            THEN RAISE(ABORT, 'Invalid confidence: ' || NEW.confidence || ' (must be 0.0-1.0)')
+          END;
+        END
+      `);
+      db.exec(`
+        CREATE TRIGGER IF NOT EXISTS knowledge_entries_check_confidence_bu
+        BEFORE UPDATE ON knowledge_entries
+        BEGIN
+          SELECT CASE
+            WHEN NEW.confidence < 0.0 OR NEW.confidence > 1.0
+            THEN RAISE(ABORT, 'Invalid confidence: ' || NEW.confidence || ' (must be 0.0-1.0)')
+          END;
+        END
+      `);
+      log("info", "schema", "Applied confidence CHECK migration via triggers");
+      return;
+    } catch (err) {
+      if (attempt < 2) {
+        log("warn", "schema", `confidence migration attempt ${attempt + 1} failed (locked), retrying...`);
+        Bun.sleepSync(1000);
+      } else {
+        log("warn", "schema", `confidence CHECK migration deferred: ${String(err)}`);
+      }
+    }
+  }
+}
+
+// ---- KB quality migration: review_state CHECK constraint ------------------
+
+function migrateReviewStateCheck(db: Database): void {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      db.exec(`
+        CREATE TRIGGER IF NOT EXISTS knowledge_entries_check_review_state_bi
+        BEFORE INSERT ON knowledge_entries
+        BEGIN
+          SELECT CASE
+            WHEN NEW.review_state NOT IN ('draft','reviewed','accepted','rejected','superseded')
+            THEN RAISE(ABORT, 'Invalid review_state: ' || NEW.review_state)
+          END;
+        END
+      `);
+      db.exec(`
+        CREATE TRIGGER IF NOT EXISTS knowledge_entries_check_review_state_bu
+        BEFORE UPDATE ON knowledge_entries
+        BEGIN
+          SELECT CASE
+            WHEN NEW.review_state NOT IN ('draft','reviewed','accepted','rejected','superseded')
+            THEN RAISE(ABORT, 'Invalid review_state: ' || NEW.review_state)
+          END;
+        END
+      `);
+      log("info", "schema", "Applied review_state CHECK migration via triggers");
+      return;
+    } catch (err) {
+      if (attempt < 2) {
+        log("warn", "schema", `review_state migration attempt ${attempt + 1} failed (locked), retrying...`);
+        Bun.sleepSync(1000);
+      } else {
+        log("warn", "schema", `review_state CHECK migration deferred: ${String(err)}`);
+      }
+    }
+  }
+}
+
+// ---- KB quality migration: occurrence outcome CHECK constraint -----------
+
+function migrateOccurrenceOutcomeCheck(db: Database): void {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      db.exec(`
+        CREATE TRIGGER IF NOT EXISTS knowledge_occurrences_check_outcome_bi
+        BEFORE INSERT ON knowledge_occurrences
+        BEGIN
+          SELECT CASE
+            WHEN NEW.outcome NOT IN ('fixed','failed','workaround','observed')
+            THEN RAISE(ABORT, 'Invalid outcome: ' || NEW.outcome)
+          END;
+        END
+      `);
+      db.exec(`
+        CREATE TRIGGER IF NOT EXISTS knowledge_occurrences_check_outcome_bu
+        BEFORE UPDATE ON knowledge_occurrences
+        BEGIN
+          SELECT CASE
+            WHEN NEW.outcome NOT IN ('fixed','failed','workaround','observed')
+            THEN RAISE(ABORT, 'Invalid outcome: ' || NEW.outcome)
+          END;
+        END
+      `);
+      log("info", "schema", "Applied occurrence outcome CHECK migration via triggers");
+      return;
+    } catch (err) {
+      if (attempt < 2) {
+        log("warn", "schema", `outcome migration attempt ${attempt + 1} failed (locked), retrying...`);
+        Bun.sleepSync(1000);
+      } else {
+        log("warn", "schema", `outcome CHECK migration deferred: ${String(err)}`);
+      }
+    }
+  }
+}
+
+// ---- KB quality migration: rebuild FTS with entry_key/kind/entity_type -----
+
+function migrateKnowledgeFts(db: Database): void {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      // Check if FTS already has the new columns
+      const ftsInfo = db.query<{ name: string }, []>(
+        "SELECT name FROM pragma_table_info('entries_fts') WHERE name = 'entry_key'"
+      ).get();
+      if (ftsInfo) {
+        log("debug", "schema", "FTS already has entry_key column — skipping rebuild");
+        return;
+      }
+
+      // Drop old FTS (non-destructive — content table untouched)
+      db.run("DROP TABLE IF EXISTS entries_fts");
+
+      // Recreate with full column coverage
+      db.exec(`
+        CREATE VIRTUAL TABLE entries_fts USING fts5(
+          entry_key,
+          kind,
+          entity_type,
+          title,
+          description,
+          root_cause,
+          canonical_solution,
+          tags,
+          content='knowledge_entries',
+          content_rowid='rowid'
+        )
+      `);
+
+      // Rebuild FTS index from existing data
+      db.run("INSERT INTO entries_fts(entries_fts) VALUES('rebuild')");
+      log("info", "schema", "Rebuilt knowledge FTS with entry_key, kind, entity_type columns");
+      return;
+    } catch (err) {
+      if (attempt < 2) {
+        log("warn", "schema", `FTS migration attempt ${attempt + 1} failed (locked), retrying...`);
+        Bun.sleepSync(1000);
+      } else {
+        log("warn", "schema", `FTS migration deferred: ${String(err)}`);
       }
     }
   }
