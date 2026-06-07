@@ -45,9 +45,10 @@ type MemoryInputType = "decision" | "pattern" | "fact" | "preference" | "error";
  * This replaces the old hard 120s timeout that caused failures on large projects.
  */
 function calculateIngestTimeout(fileCount: number): number {
-  const PER_FILE_MS = 200;          // 5 files/s → 200ms per file
+  const PER_FILE_MS = 500;          // 2 files/s — accounts for chunking + embedding + DB writes
   const MIN_TIMEOUT = 60_000;       // 1 minute minimum
   const MAX_TIMEOUT = 7_200_000;    // 120 minutes cap
+  // For 2200 files: ~18 min. For 58 files: 60s (min). For 10000 files: ~83 min.
   return Math.max(MIN_TIMEOUT, Math.min(MAX_TIMEOUT, fileCount * PER_FILE_MS));
 }
 
