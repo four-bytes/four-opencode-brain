@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// Throttled, rate-limited logger — no ANSI colors, compact single-line output
+// Throttled, rate-limited console logger — captured by opencode session log
 // ---------------------------------------------------------------------------
 
 type LogLevel = "debug" | "info" | "warn" | "error";
@@ -23,11 +23,6 @@ function shouldLog(key: string, intervalMs: number = 60000): boolean {
   return false;
 }
 
-/**
- * Suppress all console output. Use after the initial version banner.
- * When silent, only memory-based log aggregation happens — no console writes.
- * Toggle back with setSilent(false) for debug mode.
- */
 export function setSilent(val: boolean): void {
   silent = val;
 }
@@ -41,11 +36,9 @@ export function log(
   if (level === "debug" && process.env.BRAIN_DEBUG !== "true") return;
 
   if (level === "warn" || level === "info") {
-    // Throttle repetitive messages to once per 60s
     if (!shouldLog(key, 60000)) return;
   }
 
-  // Silent mode: skip all console output (errors still go to stderr)
   if (silent && level !== "error") return;
 
   const timestamp = new Date().toISOString();
@@ -55,5 +48,6 @@ export function log(
 
   if (level === "error") console.error(line);
   else if (level === "warn") console.warn(line);
+  else if (level === "debug") console.error(line);
   else console.log(line);
 }
