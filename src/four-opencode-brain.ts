@@ -71,8 +71,8 @@ const _serverPlugin = async (input: PluginInput) => {
   // Status file written to BRAIN_STATUS_FILE — TUI reads it directly (no HTTP server needed)
 
 
-  // Signal TUI we're initializing immediately
-  updateStatus("ready");
+  // Signal TUI we're initializing
+  updateStatus("busy", { text: "initializing" });
 
   // Ensure DB + schema on startup
   try {
@@ -216,7 +216,7 @@ const _serverPlugin = async (input: PluginInput) => {
 
   // Init complete — only set idle if NOT auto-ingesting
   if (!autoIngest) {
-    updateStatus("ready");
+    updateStatus("ready"); // init complete, no auto-ingest
   }
 
   // ---- Tool definitions ----
@@ -269,19 +269,19 @@ const _serverPlugin = async (input: PluginInput) => {
             durationMs: result.durationMs,
           },
         });
-        toast( msg.replace("🧠 ", ""), "success", "Brain 🧠");
+        updateStatus("success", { toast: msg.replace("🧠 ", "") });
         return JSON.stringify(result);
       } catch (err) {
         if (err instanceof TimeoutError) {
           const timeoutMsg = `🧠 Ingest timed out after ${(timeoutMs / 1000).toFixed(0)}s`;
           toolCtx.metadata({ title: timeoutMsg });
-          toast( timeoutMsg.replace("🧠 ", ""), "warning", "Brain 🧠");
+          updateStatus("warning", { toast: timeoutMsg.replace("🧠 ", "") });
           log("warn", "ingest-timeout", timeoutMsg, { path: resolvedPath });
           return JSON.stringify({ error: timeoutMsg, partial: true });
         }
         const errMsg = `🧠 Ingest error: ${String(err)}`;
         toolCtx.metadata({ title: errMsg });
-        toast( errMsg.replace("🧠 ", ""), "error", "Brain 🧠");
+        updateStatus("error", { toast: errMsg.replace("🧠 ", "") });
         return JSON.stringify({ error: String(err) });
       } finally {
         db.close();
@@ -323,12 +323,12 @@ const _serverPlugin = async (input: PluginInput) => {
       } catch (err) {
         if (err instanceof TimeoutError) {
           log("warn", "search-timeout", `Search timed out after 30s`, { query: args.query });
-          updateStatus("ready");
+          updateStatus("warning");
         return JSON.stringify({ results: [], count: 0, error: "Search timed out — try a simpler query" });
         }
         const errMsg = `Search failed: ${err instanceof Error ? err.message : String(err)}`;
         log("error", "search", errMsg, { query: args.query });
-        updateStatus("ready");
+        updateStatus("error");
         return JSON.stringify({ results: [], count: 0, error: errMsg });
       } finally {
         db.close();
