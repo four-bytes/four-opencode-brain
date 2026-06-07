@@ -224,7 +224,7 @@ const _serverPlugin = async (input: PluginInput) => {
   const brain_ingest = tool({
     description: "Ingest files/directories into the brain index. Uses content-hash dedup to skip unchanged files. Supports .ts, .js, .php, .md.",
     args: {
-      path: s.string().describe("File or directory path to ingest"),
+      path: s.string().optional().default(".").describe("File or directory path to ingest (default: .)"),
       recursive: s.boolean().optional().describe("Recurse into subdirectories (default: true)"),
       reIndex: s.boolean().optional().describe("Force re-index even if unchanged (default: false)"),
     },
