@@ -61,7 +61,7 @@ const _serverPlugin = async (input: PluginInput) => {
   const { client, project, directory, $ } = input;
 
   sessionCache.reset();
-  initStatus(client);
+  initStatus(client, directory);
   initVersion(VERSION);
   const toast = (msg: string, variant?: string, _title?: string) => {
     try { client.tui.showToast({ body: { message: msg, variant: (variant as any) ?? "info", title: "Brain 🧠" } }).catch(() => {}); } catch {}
@@ -69,7 +69,7 @@ const _serverPlugin = async (input: PluginInput) => {
   log("info", "init", `v${VERSION} loaded`, { pid: process.pid });
   setSilent(true); // suppress all subsequent console output
 
-  // Status file written to BRAIN_STATUS_FILE — TUI reads it directly (no HTTP server needed)
+  // Status file written to getBrainStatusFile(directory) — TUI reads session-scoped file 
 
 
   // Signal TUI we're initializing
