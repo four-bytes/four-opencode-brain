@@ -62,6 +62,9 @@ const _serverPlugin = async (input: PluginInput) => {
   sessionCache.reset();
   initStatus(client);
   initVersion(VERSION);
+  const toast = (msg: string, variant?: string, _title?: string) => {
+    try { client.tui.showToast({ body: { message: msg, variant: (variant as any) ?? "info", title: "Brain 🧠" } }).catch(() => {}); } catch {}
+  };
   log("info", "init", `v${VERSION} loaded`, { pid: process.pid });
   setSilent(true); // suppress all subsequent console output
 
