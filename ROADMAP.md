@@ -305,4 +305,4 @@ Per P48 — Open Source Github Review Automation: CI, linters, and tests are alr
 
 | Wave | Status | Issue |
 |------|--------|-------|
-| A7 | 🔄 In Progress | — |
+| A7 | ✅ Done | #87 |
