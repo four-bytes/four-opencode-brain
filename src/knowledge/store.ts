@@ -290,12 +290,12 @@ export function kbRecord(db: Database, input: KbRecordInput): KbOccurrence {
 
   if (!existing) {
     throw new Error(`Entry not found: ${input.entry_key} (kind: ${input.kind})`);
-  
+  }
+
   // Validate outcome
   const VALID_OUTCOMES = ["fixed", "failed", "workaround", "observed"];
   if (!VALID_OUTCOMES.includes(input.outcome)) {
     throw new Error(`Invalid outcome: "${input.outcome}". Must be one of: ${VALID_OUTCOMES.join(", ")}`);
-  }
   }
 
   const id = generateId();

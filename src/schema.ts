@@ -855,6 +855,36 @@ function migrateKnowledgeFts(db: Database): void {
       // Rebuild FTS index from existing data
       db.run("INSERT INTO entries_fts(entries_fts) VALUES('rebuild')");
       log("info", "schema", "Rebuilt knowledge FTS with entry_key, kind, entity_type columns");
+
+      // Recreate FTS sync triggers with full column coverage
+      db.exec("DROP TRIGGER IF EXISTS entries_ai");
+      db.exec("DROP TRIGGER IF EXISTS entries_ad");
+      db.exec("DROP TRIGGER IF EXISTS entries_au");
+
+      db.exec(`
+        CREATE TRIGGER entries_ai AFTER INSERT ON knowledge_entries BEGIN
+          INSERT INTO entries_fts(rowid, entry_key, kind, entity_type, title, description, root_cause, canonical_solution, tags)
+          VALUES (new.rowid, new.entry_key, new.kind, new.entity_type, new.title, new.description, new.root_cause, new.canonical_solution, new.tags);
+        END
+      `);
+
+      db.exec(`
+        CREATE TRIGGER entries_ad AFTER DELETE ON knowledge_entries BEGIN
+          INSERT INTO entries_fts(entries_fts, rowid, entry_key, kind, entity_type, title, description, root_cause, canonical_solution, tags)
+          VALUES ('delete', old.rowid, old.entry_key, old.kind, old.entity_type, old.title, old.description, old.root_cause, old.canonical_solution, old.tags);
+        END
+      `);
+
+      db.exec(`
+        CREATE TRIGGER entries_au AFTER UPDATE ON knowledge_entries BEGIN
+          INSERT INTO entries_fts(entries_fts, rowid, entry_key, kind, entity_type, title, description, root_cause, canonical_solution, tags)
+          VALUES ('delete', old.rowid, old.entry_key, old.kind, old.entity_type, old.title, old.description, old.root_cause, old.canonical_solution, old.tags);
+          INSERT INTO entries_fts(rowid, entry_key, kind, entity_type, title, description, root_cause, canonical_solution, tags)
+          VALUES (new.rowid, new.entry_key, new.kind, new.entity_type, new.title, new.description, new.root_cause, new.canonical_solution, new.tags);
+        END
+      `);
+
+      log("info", "schema", "Recreated FTS sync triggers with full 8-column coverage");
       return;
     } catch (err) {
       if (attempt < 2) {
