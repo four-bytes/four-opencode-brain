@@ -4,7 +4,7 @@
 
 [![npm](https://img.shields.io/npm/v/@four-bytes/four-opencode-brain)](https://www.npmjs.com/package/@four-bytes/four-opencode-brain)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.4.0-blue)](https://github.com/four-bytes/four-opencode-brain/releases)
+[![Version](https://img.shields.io/badge/version-1.5.0-blue)](https://github.com/four-bytes/four-opencode-brain/releases)
 
 ## Features
 
@@ -18,11 +18,33 @@
 ## Installation
 
 ```bash
-npm install @four-bytes/four-opencode-brain
+# Clone and install
+git clone https://github.com/four-bytes/four-opencode-brain
+cd four-opencode-brain
+bun install && bun run build
+
+# Register globally (required — TUI slot plugin)
+opencode plugin install . -g
 ```
 
-Or install via opencode's plugin marketplace.
+Or via GitHub dependency in opencode.json:
 
+```json
+{
+  "plugin": [
+    "github:four-bytes/four-opencode-brain"
+  ]
+}
+```
+
+- **Hybrid Search** — FTS5 full-text + vec0 vector search with RRF fusion
+- **Memory** — Session-scoped notes, decisions, patterns, errors, diary entries
+- **Knowledge Base** — Problem-centric entries with confidence gating and review lifecycle
+- **Auto-Ingest** — Indexes project files on startup (git repos only)
+- **TUI Status Bar** — Live spinner, progress, and completion indicators
+- **Content-Hash Dedup** — Skips unchanged files automatically
+
+## Installation
 ## Quick Start
 
 After installation, the brain auto-ingests your project on startup (git repos only). You can also:
