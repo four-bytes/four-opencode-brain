@@ -120,6 +120,9 @@ export function updateStatus(state: StatusState, opts?: StatusOpts): void {
         phase: "idle",
         statusText: opts?.text ?? "",
         busy: false,
+        scanning: false,
+        searching: false,
+        ingesting: false,
       });
       if (opts?.toast && _client) {
         _client.tui.showToast({ body: { title: "Brain 🧠", message: opts.toast, variant: opts.toastVariant ?? "success", duration: 5000 } });
@@ -131,6 +134,9 @@ export function updateStatus(state: StatusState, opts?: StatusOpts): void {
         phase: "idle",
         statusText: opts?.text ?? "",
         busy: false,
+        scanning: false,
+        searching: false,
+        ingesting: false,
       });
       if (opts?.toast && _client) {
         _client.tui.showToast({ body: { title: "Brain 🧠", message: opts.toast, variant: opts.toastVariant ?? "warning", duration: 5000 } });
@@ -142,6 +148,9 @@ export function updateStatus(state: StatusState, opts?: StatusOpts): void {
         phase: "idle",
         statusText: opts?.text ?? "error occurred",
         busy: false,
+        scanning: false,
+        searching: false,
+        ingesting: false,
       });
       if (opts?.toast && _client) {
         _client.tui.showToast({ body: { title: "Brain 🧠", message: opts.toast, variant: "error", duration: 7000 } });
@@ -153,6 +162,9 @@ export function updateStatus(state: StatusState, opts?: StatusOpts): void {
         phase: "idle",
         statusText: "",
         busy: false,
+        scanning: false,
+        searching: false,
+        ingesting: false,
       });
       break;
   }
