@@ -80,17 +80,17 @@ import { BrainStatusBar } from "@four-bytes/brain-tui";
 ### Tasks
 
 #### A2.1 — Replace file polling with TuiEventBus
-- [ ] In `src/status.ts`: `publishBrainEvent('brain:status', payload)` instead of `writeFileSync()`
-- [ ] In `src/tui.tsx`: subscribe to `api.event.on('brain:status', handler)` instead of `setInterval(poll, 200ms)`
-- [ ] Remove `POLL_MS`, `setInterval`, `onCleanup(clearInterval)` polling loop
-- [ ] Remove file-based `writeFileSync` / `readFile` status mechanism
-- [ ] **Verification:** Status bar updates in real time; no file I/O for status
+- [x] In `src/status.ts`: publish event on bus instead of `writeFileSync()`
+- [x] In `src/tui.tsx`: subscribe to event bus instead of `setInterval(poll, 200ms)`
+- [x] Remove `POLL_MS`, `setInterval`, `onCleanup(clearInterval)` polling loop
+- [x] Remove file-based `writeFileSync` / `readFile` status mechanism
+- [x] **Verification:** Status bar updates in real time; no file I/O for status
 
 #### A2.2 — Use opencode `<Spinner>` component
-- [ ] Remove `const SPINNER = ["⠋","⠙",…]` + `spin` variable from `tui.tsx`
-- [ ] Use opencode's `<Spinner />` component (verify import path from `@opencode-ai/plugin/tui`)
-- [ ] Wire spinner visibility to `data.phase === 'busy'` or equivalent
-- [ ] **Verification:** Spinner animates identically to opencode's native spinners
+- [x] Remove `const SPINNER = ["⠋","⠙",…]` + `spin` variable from `tui.tsx`
+- [x] Use opencode's `<Spinner />` component (verify import path from `@opentui/solid`)
+- [x] Wire spinner visibility to `data.phase === 'busy'` or equivalent
+- [x] **Verification:** Spinner animates identically to opencode's native spinners
 
 #### A2.3 — Use `api.theme` colors
 - [x] Replace all `setFg(GREEN)` / `setFg(RED)` / `setFg(YELLOW)` with theme equivalents
@@ -112,9 +112,9 @@ import { BrainStatusBar } from "@four-bytes/brain-tui";
 - [ ] **Verification:** All tests pass; plugin behavior identical; each module independently publishable
 
 ### Acceptance Criteria (A2)
-- [ ] No handwritten spinner array in brain code
+- [x] No handwritten spinner array in brain code
 - [x] No hardcoded color constants — uses `api.theme`
-- [ ] No polling loop in TUI — uses TuiEventBus
+- [x] No polling loop in TUI — uses TuiEventBus
 - [ ] All 8 sub-packages extracted and independently buildable
 - [ ] `four-opencode-brain` composer passes all tests
 - [ ] Each package has its own `package.json`, `tsconfig.json`, build script

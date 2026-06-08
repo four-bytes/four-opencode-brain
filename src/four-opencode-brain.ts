@@ -62,13 +62,13 @@ const _serverPlugin = async (input: PluginInput) => {
   const { client, project, directory, $ } = input;
 
   sessionCache.reset();
-  initStatus(client, directory);
+  initStatus(client);
   initVersion(VERSION);
   const toast = createToast(client, "Brain 🧠"); // replaced inline with @four-bytes/opencode-plugin-lib
   log("info", "init", `v${VERSION} loaded`, { pid: process.pid });
   setSilent(true); // suppress all subsequent console output
 
-  // Status file written to getBrainStatusFile(directory) — TUI reads session-scoped file 
+  // Status published via event bus — TUI subscribes to push-based updates
 
 
   // Signal TUI we're initializing
