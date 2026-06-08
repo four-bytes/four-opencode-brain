@@ -53,7 +53,7 @@ function calculateIngestTimeout(fileCount: number): number {
 }
 
 /** Unified status updates — see src/status.ts */
-import { updateStatus, initStatus, initVersion, stopStatusServer } from "./status";
+import { updateStatus, initStatus, initVersion, stopStatusServer, toast } from "./status";
 
 
 
@@ -95,20 +95,20 @@ const _serverPlugin = async (input: PluginInput) => {
     // Fire-and-forget — don't block plugin readiness
     (async () => {
       // Signal TUI we're scanning the directory tree
-      updateStatus("busy", { text: "scanning files", scanning: true, total: 0 });
+      updateStatus("busy", { text: "scanning files...", total: 0 });
 
       // Quick preliminary file count for toast + timeout calculation
       let fileCount = 0;
       try {
         const walked = await resolveFiles(directory, true);
         fileCount = walked.files.length;
-        updateStatus("busy", { text: "scanning files", scanning: true, total: fileCount });
+        updateStatus("busy", { text: `scanning files... ${fileCount}`, total: fileCount });
         const timeoutS = (calculateIngestTimeout(fileCount) / 1000).toFixed(0);
         toast( `Indexing ${fileCount} files… (timeout: ${timeoutS}s)`, "info", "Brain 🧠");
-        updateStatus("busy", { text: `ingesting... 0/${fileCount}`, progress: 0, current: 0, total: fileCount, ingesting: true });
+        updateStatus("busy", { text: `ingesting... 0/${fileCount}`, current: 0, total: fileCount });
       } catch {
         toast( `Indexing ${project?.name ?? "project"}…`, "info", "Brain 🧠");
-        updateStatus("busy", { text: "ingesting...", progress: 0, ingesting: true });
+        updateStatus("busy", { text: "ingesting..." });
       }
 
       const ingestDb = initBrainDatabase();
@@ -120,9 +120,8 @@ const _serverPlugin = async (input: PluginInput) => {
             reIndex: false,
             project: directory,
             progressCallback: ({ current, total }) => {
-              const pct = total > 0 ? Math.round((current / total) * 100) : 0;
               // Update status file every tick so TUI spinner stays live
-              updateStatus("busy", { text: `ingesting... ${current}/${total}`, progress: pct, current, total, ingesting: true });
+              updateStatus("busy", { text: `ingesting... ${current}/${total}`, current, total });
             },
           }),
           timeoutMs,
@@ -248,9 +247,8 @@ const _serverPlugin = async (input: PluginInput) => {
             reIndex: args.reIndex === true,
             project: toolCtx.directory,
             progressCallback: ({ current, total }) => {
-              const pct = total > 0 ? Math.round((current / total) * 100) : 0;
               // Update status file every tick so TUI spinner stays live
-              updateStatus("busy", { text: `ingesting... ${current}/${total}`, progress: pct, current, total, ingesting: true });
+              updateStatus("busy", { text: `ingesting... ${current}/${total}`, current, total });
             },
           }),
           timeoutMs,
@@ -295,7 +293,7 @@ const _serverPlugin = async (input: PluginInput) => {
       project: s.string().optional().describe("Project name or hash to scope search"),
     },
     execute: async (args, toolCtx) => {
-      updateStatus("busy", { text: "searching...", searching: true });
+      updateStatus("busy", { text: "searching..." });
       const db = initBrainDatabase();
       try {
         const results = await withTimeout(
