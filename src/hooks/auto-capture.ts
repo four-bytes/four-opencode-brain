@@ -12,7 +12,6 @@ import { log } from "../logger";
 /**
  * TUI toast notification — silently handles all errors.
  */
-import { createToast } from "@four-bytes/opencode-plugin-lib";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -346,7 +345,7 @@ export async function onSessionIdle(
     });
 
     if (client && (decisionsSaved + consideredSaved + errorsSaved) > 0) {
-      createToast(client, "Brain 🧠")(`Auto-captured ${summaryText}`, "success");
+      client.tui.showToast({ body: { title: "Brain 🧠", message: `Auto-captured ${summaryText}`, variant: "success", duration: 5000 } });
     }
   } finally {
     if (!db) conn.close();

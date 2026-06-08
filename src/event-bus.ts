@@ -31,9 +31,10 @@ export interface BrainStatusEvent {
   current?: number;
   total?: number;
   scanning?: boolean;
+  searching?: boolean;
+  ingesting?: boolean;
   blocked?: boolean;
   busy?: boolean;
-  searching?: boolean;
   version?: string;
   error?: string;
 }

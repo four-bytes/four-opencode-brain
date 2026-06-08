@@ -33,28 +33,32 @@ function BrainStatusBar(props: { centered?: boolean; api: TuiPluginApi }) {
         return;
       }
 
-      if (data.phase === "busy") {
-        setBusy(true);
-        setStatus(data.statusText ?? "working");
-        setFg(pulse % 2 === 0 ? theme().warning : theme().accent);
-      } else if (data.scanning) {
-        setBusy(true);
-        setStatus("scanning files");
-        setFg(pulse % 2 === 0 ? theme().warning : theme().accent);
-      } else if (data.phase === "init") {
+      if (data.phase === "init") {
         setBusy(true);
         setStatus(data.statusText ?? "initializing...");
         setFg(pulse % 2 === 0 ? theme().warning : theme().accent);
-      } else if (data.phase === "ingest") {
+      } else if (data.scanning) {
+        setBusy(true);
+        setStatus("scanning files... " + (data.total ?? 0));
+        setFg(pulse % 2 === 0 ? theme().warning : theme().accent);
+      } else if (data.ingesting) {
         setBusy(true);
         setCurrent(data.current ?? 0);
         setTotal(data.total ?? 0);
         setPct(data.progress ?? 0);
-        setStatus("ingesting " + (data.current ?? 0) + "/" + (data.total ?? 0) + " (" + (data.progress ?? 0).toFixed(1) + "%)");
+        setStatus("ingesting... " + (data.current ?? 0) + "/" + (data.total ?? 0) + " (" + (data.progress ?? 0).toFixed(1) + "%)");
+        setFg(pulse % 2 === 0 ? theme().warning : theme().success);
+      } else if (data.phase === "ingest") {
+        // fallback for legacy ingest phase
+        setBusy(true);
+        setCurrent(data.current ?? 0);
+        setTotal(data.total ?? 0);
+        setPct(data.progress ?? 0);
+        setStatus("ingesting... " + (data.current ?? 0) + "/" + (data.total ?? 0) + " (" + (data.progress ?? 0).toFixed(1) + "%)");
         setFg(pulse % 2 === 0 ? theme().warning : theme().success);
       } else if (data.searching) {
         setBusy(true);
-        setStatus("searching");
+        setStatus("searching...");
         setFg(pulse % 2 === 0 ? theme().warning : theme().success);
       } else if (data.blocked) {
         setBusy(false);
