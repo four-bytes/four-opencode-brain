@@ -1,5 +1,4 @@
 import { writeFileSync, mkdirSync, existsSync } from "fs";
-import { createToast } from "@four-bytes/opencode-plugin-lib";
 import type { PluginInput } from "@opencode-ai/plugin";
 import { brainBus, type BrainStatusEvent } from "./event-bus";
 import { getBrainStatusFile } from "./shared";
@@ -17,13 +16,16 @@ export interface StatusOpts {
   progress?: number;
   current?: number;
   total?: number;
+  scanning?: boolean;
+  searching?: boolean;
+  ingesting?: boolean;
 }
 
 /** Merged state — published via event bus on every update */
 let currentStatus: Record<string, unknown> = { phase: "init", version: "" };
 let _version = "";
 
-let toastFn: ReturnType<typeof createToast> | null = null;
+let _client: PluginInput["client"] | null = null;
 let _statusFile = "";
 
 /** Initialize with client for toast support */
@@ -33,7 +35,7 @@ export function initVersion(v: string): void {
 }
 
 export function initStatus(client: PluginInput["client"], directory: string): void {
-  toastFn = createToast(client, "Brain 🧠");
+  _client = client;
   _statusFile = getBrainStatusFile(directory);
 }
 
@@ -68,7 +70,9 @@ export function updateStatus(state: StatusState, opts?: StatusOpts): void {
         progress: opts?.progress,
         current: opts?.current,
         total: opts?.total,
-        scanning: false,
+        scanning: opts?.scanning ?? false,
+        searching: opts?.searching ?? false,
+        ingesting: opts?.ingesting ?? false,
         blocked: false,
       });
       break;
@@ -79,8 +83,8 @@ export function updateStatus(state: StatusState, opts?: StatusOpts): void {
         statusText: opts?.text ?? "",
         busy: false,
       });
-      if (opts?.toast && toastFn) {
-        toastFn(opts.toast, opts.toastVariant ?? "success");
+      if (opts?.toast && _client) {
+        _client.tui.showToast({ body: { title: "Brain 🧠", message: opts.toast, variant: opts.toastVariant ?? "success", duration: 5000 } });
       }
       break;
 
@@ -90,8 +94,8 @@ export function updateStatus(state: StatusState, opts?: StatusOpts): void {
         statusText: opts?.text ?? "",
         busy: false,
       });
-      if (opts?.toast && toastFn) {
-        toastFn(opts.toast, opts.toastVariant ?? "warning");
+      if (opts?.toast && _client) {
+        _client.tui.showToast({ body: { title: "Brain 🧠", message: opts.toast, variant: opts.toastVariant ?? "warning", duration: 5000 } });
       }
       break;
 
@@ -101,8 +105,8 @@ export function updateStatus(state: StatusState, opts?: StatusOpts): void {
         statusText: opts?.text ?? "error occurred",
         busy: false,
       });
-      if (opts?.toast && toastFn) {
-        toastFn(opts.toast, "error");
+      if (opts?.toast && _client) {
+        _client.tui.showToast({ body: { title: "Brain 🧠", message: opts.toast, variant: "error", duration: 7000 } });
       }
       break;
 
@@ -118,5 +122,5 @@ export function updateStatus(state: StatusState, opts?: StatusOpts): void {
 
 /** Convenience wrapper for direct toast calls without status file updates */
 export function toast(msg: string, variant: "info" | "success" | "warning" | "error" = "info", _title?: string): void {
-  if (toastFn) toastFn(msg, variant);
+  _client?.tui.showToast({ body: { title: "Brain 🧠", message: msg, variant, duration: variant === "error" ? 7000 : 5000 } });
 }
