@@ -24,7 +24,10 @@ let _version = "";
 let toastFn: ReturnType<typeof createToast> | null = null;
 
 /** Initialize with client for toast support */
-export function initVersion(v: string): void { _version = v; }
+export function initVersion(v: string): void {
+  _version = v;
+  write({ phase: "init", statusText: "initializing ..." });
+}
 
 export function initStatus(client: PluginInput["client"]): void {
   toastFn = createToast(client, "Brain 🧠");
