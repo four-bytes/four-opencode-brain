@@ -106,7 +106,7 @@ export class EmbeddingService {
     if (this.initPromise) return this.initPromise;
 
     this.initPromise = (async () => {
-      if (process.env.BRAIN_EMBED_DISABLE === "true" || process.env.BRAIN_EMBED_DISABLE === "1") {
+      if (process.env.BRAIN_EMBED_ENABLE !== "true" && process.env.BRAIN_EMBED_ENABLE !== "1") {
         this.initialized = true;
         this._available = false;
         return;
