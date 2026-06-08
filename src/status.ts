@@ -1,7 +1,6 @@
 import { createToast } from "@four-bytes/opencode-plugin-lib";
 import type { PluginInput } from "@opencode-ai/plugin";
-import { writeFileSync, mkdirSync, existsSync } from "fs";
-import { getBrainStatusFile } from "./shared";
+import { brainBus, type BrainStatusEvent } from "./event-bus";
 
 export type StatusState = "busy" | "success" | "warning" | "error" | "ready";
 
@@ -18,30 +17,22 @@ export interface StatusOpts {
   total?: number;
 }
 
-/** Merged state — written to file on every update */
+/** Merged state — published via event bus on every update */
 let currentStatus: Record<string, unknown> = { phase: "init", version: "" };
 let _version = "";
-let _statusFile = "";
 
 let toastFn: ReturnType<typeof createToast> | null = null;
 
-/** Initialize with client for toast support and directory for session-scoped status file */
+/** Initialize with client for toast support */
 export function initVersion(v: string): void { _version = v; }
 
-export function initStatus(client: PluginInput["client"], directory: string): void {
+export function initStatus(client: PluginInput["client"]): void {
   toastFn = createToast(client, "Brain 🧠");
-  _statusFile = getBrainStatusFile(directory);
 }
 
 function write(data: Record<string, unknown>): void {
   currentStatus = { ...currentStatus, ...data };
-  try {
-    const dir = _statusFile.replace(/\/[^/]+$/, "");
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    writeFileSync(_statusFile, JSON.stringify({ ...currentStatus, version: _version, updated: Date.now() }));
-  } catch {
-    // never crash on status file failure
-  }
+  brainBus.emit("status", { ...currentStatus, version: _version } as BrainStatusEvent);
 }
 
 /**
