@@ -1,8 +1,8 @@
 import type { Plugin, PluginInput } from "@opencode-ai/plugin";
 import { tool } from "@opencode-ai/plugin";
 import { sessionCache } from "./cache";
-import { log, setSilent } from "./logger";
-import { initBrainDatabase } from "./schema";
+import { log, setSilent, setLogClient } from "./logger";
+import { initBrainDatabase, withDbRetry, checkpointDatabase } from "./schema";
 import { ingestPath } from "./ingest";
 import { resolveFiles } from "./ingest/loader";
 import { embedChunks } from "./ingest/embed";
@@ -62,9 +62,10 @@ const _serverPlugin = async (input: PluginInput) => {
 
   sessionCache.reset();
   initStatus(client, directory);
+  setLogClient(client);
   initVersion(VERSION);
   log("info", "init", `v${VERSION} loaded`, { pid: process.pid });
-  setSilent(true); // suppress all subsequent console output
+  setSilent(process.env.BRAIN_DEBUG !== "true"); // suppress all subsequent console output unless BRAIN_DEBUG is set
 
   // Status published via event bus — TUI subscribes to push-based updates
 
@@ -72,6 +73,7 @@ const _serverPlugin = async (input: PluginInput) => {
   // Ensure DB + schema on startup
   try {
     const db = initBrainDatabase();
+    checkpointDatabase(db);  // Recover from previous crash + shrink WAL
     db.close();
   } catch (err) {
     log("error", "schema", `Schema init failed: ${String(err)}`);
@@ -297,7 +299,7 @@ const _serverPlugin = async (input: PluginInput) => {
       const db = initBrainDatabase();
       try {
         const results = await withTimeout(
-          brainSearch(db, args.query, {
+          withDbRetry(() => brainSearch(db, args.query, {
             filters: args.filters,
             limit: args.limit ?? 20,
             contentType: (args.contentType ?? "all") as
@@ -308,7 +310,7 @@ const _serverPlugin = async (input: PluginInput) => {
               | "symbol"
               | "all",
             project: (args.project as string | undefined) ?? toolCtx.directory,
-          }),
+          })),
           30_000,
           `brainSearch(${args.query})`,
         );
@@ -319,6 +321,10 @@ const _serverPlugin = async (input: PluginInput) => {
           log("warn", "search-timeout", `Search timed out after 30s`, { query: args.query });
           updateStatus("warning");
         return JSON.stringify({ results: [], count: 0, error: "Search timed out — try a simpler query" });
+        }
+        if (String(err).includes("SQLITE_BUSY")) {
+          updateStatus("warning", { text: "Database busy — retry in a moment" });
+          return JSON.stringify({ results: [], count: 0, error: "Database is busy. Another operation (ingest) is in progress. Please retry." });
         }
         const errMsg = `Search failed: ${err instanceof Error ? err.message : String(err)}`;
         log("error", "search", errMsg, { query: args.query });
@@ -398,55 +404,55 @@ const _serverPlugin = async (input: PluginInput) => {
         switch (args.mode) {
           case "add":
             updateStatus("busy", { text: "Storing memory…" });
-            const addResult = memoryAdd(db, {
+            const addResult = await withDbRetry(() => memoryAdd(db, {
                 type: (args.type ?? "fact") as MemoryInputType,
                 title: args.title as string,
                 content: args.content as string,
                 tags: args.tags as string | undefined,
                 project: args.project as string | undefined,
-              });
+              }));
             updateStatus("success", { text: "Memory stored", toast: "Memory stored" });
             return JSON.stringify(addResult);
           case "search":
             return JSON.stringify(
-              memorySearch(db, {
+              await withDbRetry(() => memorySearch(db, {
                 query: args.query as string | undefined,
                 type: args.type as string | undefined,
                 tags: args.tags as string | undefined,
                 project: args.project as string | undefined,
                 crossProject: args.crossProject === true,
                 limit: args.limit as number | undefined,
-              }),
+              })),
             );
           case "list":
             return JSON.stringify(
-              memoryList(db, {
+              await withDbRetry(() => memoryList(db, {
                 type: args.type as string | undefined,
                 project: args.project as string | undefined,
                 limit: args.limit as number | undefined,
                 offset: args.offset as number | undefined,
-              }),
+              })),
             );
           case "forget":
             updateStatus("busy", { text: "Removing memory…" });
-            const forgetOk = memoryForget(db, args.id as string);
+            const forgetOk = await withDbRetry(() => memoryForget(db, args.id as string));
             updateStatus(forgetOk ? "success" : "error", { text: forgetOk ? "Memory removed" : "Memory not found", toast: forgetOk ? "Memory removed" : "Memory not found" });
             return JSON.stringify({ ok: forgetOk });
           case "diary": {
             // Auto-detect: if title + content provided → add entry; otherwise → get
             const diaryDate = (args.diaryDate as string) ?? (args.date as string) ?? new Date().toISOString().split("T")[0];
             if (args.diaryTitle && args.diaryContent) {
-              diaryAdd(db, { title: args.diaryTitle, content: args.diaryContent, date: diaryDate });
-              return JSON.stringify(diaryGet(db, diaryDate));
+              await withDbRetry(() => diaryAdd(db, { title: args.diaryTitle as string, content: args.diaryContent as string, date: diaryDate }));
+              return JSON.stringify(await withDbRetry(() => diaryGet(db, diaryDate)));
             }
             if (args.title && args.content) {
-              diaryAdd(db, { title: args.title, content: args.content, date: diaryDate });
-              return JSON.stringify(diaryGet(db, diaryDate));
+              await withDbRetry(() => diaryAdd(db, { title: args.title as string, content: args.content as string, date: diaryDate }));
+              return JSON.stringify(await withDbRetry(() => diaryGet(db, diaryDate)));
             }
-            return JSON.stringify(diaryGet(db, diaryDate));
+            return JSON.stringify(await withDbRetry(() => diaryGet(db, diaryDate)));
           }
           case "get": {
-            const found = memoryGet(db, args.id as string);
+            const found = await withDbRetry(() => memoryGet(db, args.id as string));
             return JSON.stringify(found ?? { error: `Memory not found: ${args.id}` });
           }
           default:
@@ -456,6 +462,10 @@ const _serverPlugin = async (input: PluginInput) => {
             });
         }
       } catch (err) {
+        if (String(err).includes("SQLITE_BUSY")) {
+          updateStatus("warning", { text: "Database busy — retry in a moment" });
+          return JSON.stringify({ error: "Database is busy. Another operation (ingest) is in progress. Please retry." });
+        }
         const errMsg = `Memory operation failed: ${err instanceof Error ? err.message : String(err)}`;
         log("error", "memory", errMsg, { mode: args.mode });
         return JSON.stringify({ error: errMsg });

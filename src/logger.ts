@@ -11,6 +11,11 @@ interface ThrottleState {
 
 const throttles = new Map<string, ThrottleState>();
 let silent = false;
+let _logClient: any = null;
+
+export function setLogClient(client: any): void {
+  _logClient = client;
+}
 
 function shouldLog(key: string, intervalMs: number = 60000): boolean {
   const now = Date.now();
@@ -46,8 +51,18 @@ export function log(
   const payload = data ? ` ${JSON.stringify(data)}` : "";
   const line = `${prefix} ${msg}${payload}`;
 
+  // App.log output (plugin mode) — additional structured channel
+  if (_logClient) {
+    const appLevel = level === "warn" ? "warn" : level === "error" ? "error" : level === "debug" ? "debug" : "info";
+    _logClient.app?.log({
+      body: { service: key, level: appLevel, message: msg, extra: data },
+    }).catch(() => {});
+    // Debug messages go ONLY to app.log — skip console
+    if (level === "debug") return;
+  }
+
+  // Console output — preserved for user visibility (info/warn/error)
   if (level === "error") console.error(line);
   else if (level === "warn") console.warn(line);
-  else if (level === "debug") console.error(line);
-  else console.log(line);
+  else if (!silent) console.log(line);
 }

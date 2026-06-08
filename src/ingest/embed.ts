@@ -106,11 +106,14 @@ export async function embedChunks(db: Database, chunkIds: string[]): Promise<num
   const embService = EmbeddingService.getInstance();
   let useRealEmbeddings = false;
   if (!embService.isAvailable() && !embService.getDimensions()) {
-    try {
-      await embService.initialize();
-      useRealEmbeddings = embService.isAvailable();
-    } catch {
-      useRealEmbeddings = false;
+    // Try real embeddings unless explicitly disabled
+    if (process.env.BRAIN_EMBED_DISABLE !== "true" && process.env.BRAIN_EMBED_DISABLE !== "1") {
+      try {
+        await embService.initialize();
+        useRealEmbeddings = embService.isAvailable();
+      } catch {
+        useRealEmbeddings = false;
+      }
     }
   } else {
     useRealEmbeddings = embService.isAvailable();

@@ -188,7 +188,7 @@ function chunkByHeadings(
  * @param qualifiedSym Optional qualified symbol path to inherit.
  * @param symKind      Optional symbol kind to inherit.
  */
-function windowChunks(
+async function windowChunks(
   subContent: string,
   documentId: string,
   fileId: string,
@@ -197,7 +197,7 @@ function windowChunks(
   baseLine = 1,
   qualifiedSym?: string,
   symKind?: string,
-): Chunk[] {
+): Promise<Chunk[]> {
   const chunks: Chunk[] = [];
   const windowChars = TOKEN_WINDOW * CHARS_PER_TOKEN;
   const overlapChars = TOKEN_OVERLAP * CHARS_PER_TOKEN;
@@ -207,6 +207,7 @@ function windowChunks(
   if (len === 0) return [];
 
   const lineIdx = new LineIndex(subContent);
+  let chunkCount = 0;
 
   for (let offset = 0; offset < len; offset += step) {
     const end = Math.min(offset + windowChars, len);
@@ -228,6 +229,11 @@ function windowChunks(
       tokenCount: estimateTokens(chunkText),
     });
 
+    chunkCount++;
+    if (chunkCount % 50 === 0) {
+      await new Promise(r => setTimeout(r, 0));
+    }
+
     if (end >= len) break;
   }
 
@@ -248,13 +254,13 @@ function windowChunks(
  * If the total file ≤ MAX_TOKENS_PER_CHUNK, a full-document chunk is also
  * appended for top-level content (imports, etc.).
  */
-function chunkBySymbols(
+async function chunkBySymbols(
   content: string,
   symbols: ExtractedSymbol[],
   documentId: string,
   fileId: string,
   totalTokenCount: number,
-): Chunk[] {
+): Promise<Chunk[]> {
   const sorted = [...symbols].sort(
     (a, b) => a.startLine - b.startLine || a.endLine - b.endLine,
   );
@@ -284,7 +290,7 @@ function chunkBySymbols(
       });
     } else {
       // Large symbol → split into windows
-      const windows = windowChunks(
+      const windows = await windowChunks(
         symContent,
         documentId,
         fileId,
@@ -325,12 +331,12 @@ function chunkBySymbols(
 // Fallback chunking (non-code files or when symbol extraction fails)
 // ---------------------------------------------------------------------------
 
-function fallbackChunk(
+async function fallbackChunk(
   content: string,
   documentId: string,
   fileId: string,
   totalTokenCount: number,
-): Chunk[] {
+): Promise<Chunk[]> {
   // Content shorter than the window → single document chunk
   if (totalTokenCount <= TOKEN_WINDOW) {
     const h = hashContentCached(content);
@@ -353,7 +359,7 @@ function fallbackChunk(
   }
 
   // Sliding-window fallback
-  return windowChunks(content, documentId, fileId, 0);
+  return await windowChunks(content, documentId, fileId, 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -413,7 +419,7 @@ export async function chunkContent(input: ChunkInput): Promise<Chunk[]> {
     try {
       const symbols = await extractSymbols(content, filePath);
       if (symbols.length > 0) {
-        return chunkBySymbols(content, symbols, documentId, fileId, totalTokenCount);
+        return await chunkBySymbols(content, symbols, documentId, fileId, totalTokenCount);
       }
     } catch {
       // Fall through to window chunking
@@ -421,5 +427,5 @@ export async function chunkContent(input: ChunkInput): Promise<Chunk[]> {
   }
 
   // Large files without symbols: sliding windows
-  return fallbackChunk(content, documentId, fileId, totalTokenCount);
+  return await fallbackChunk(content, documentId, fileId, totalTokenCount);
 }

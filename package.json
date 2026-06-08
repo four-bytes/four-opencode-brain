@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "build": "NODE_ENV=production bun run scripts/build.ts",
+    "postinstall": "ln -sf node_modules/node-llama-cpp/llama llama",
     "test": "bun test"
   },
   "keywords": [

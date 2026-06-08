@@ -14,6 +14,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { ensureModel } from './modelDownloader';
 import { log } from '../logger';
+import { generateEmbedding } from '../ingest/embed';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -64,6 +65,13 @@ export class EmbeddingService {
   async initialize(modelPath?: string, cacheDir?: string): Promise<void> {
     if (this.initialized) return;
 
+    // Skip real embeddings only if explicitly disabled
+    if (process.env.BRAIN_EMBED_DISABLE === "true" || process.env.BRAIN_EMBED_DISABLE === "1") {
+      this.initialized = true;
+      this._available = false;
+      return;
+    }
+
     try {
       const resolvedModelPath = modelPath ?? await ensureModel(
         DEFAULT_MODEL,
@@ -76,7 +84,8 @@ export class EmbeddingService {
 
       // Dynamic import to avoid top-level dependency on node-llama-cpp
       const { getLlama, LlamaLogLevel } = await import('node-llama-cpp');
-      const llama = await getLlama({ gpu: false, logLevel: LlamaLogLevel.error });
+
+      const llama = await getLlama({ gpu: false, build: "never" as any, logLevel: LlamaLogLevel.error });
       this.model = await llama.loadModel({ modelPath: resolvedModelPath });
       this.ctx = await this.model.createEmbeddingContext();
 
@@ -90,8 +99,8 @@ export class EmbeddingService {
         );
       }
     } catch (err) {
-      log('warn', 'embedding-service',
-        `Failed to load embedding model: ${String(err)}. Falling back to hash-based pseudo-embeddings.`,
+      log('info', 'embedding-service',
+        'Real embedding model not available (prebuilt binary missing or incompatible), using hash-based pseudo-embeddings. Set BRAIN_EMBED_DISABLE=true to skip this attempt.',
       );
       this.initialized = true; // Mark initialized so consumers don't block
       this._available = false;
@@ -116,8 +125,9 @@ export class EmbeddingService {
    * @returns     Float32Array of length `dimensions`
    */
   async embed(text: string): Promise<Float32Array> {
+    // Fallback to hash-based pseudo-embeddings when real model unavailable
     if (!this._available) {
-      throw new Error('EmbeddingService not available — real model not loaded');
+      return generateEmbedding(text);
     }
 
     // Lazy dimension discovery on first real call
@@ -147,10 +157,6 @@ export class EmbeddingService {
    * @returns      Array of Float32Array embeddings, same order as input
    */
   async embedBatch(texts: string[]): Promise<Float32Array[]> {
-    if (!this._available) {
-      throw new Error('EmbeddingService not available — real model not loaded');
-    }
-
     const total = texts.length;
     const results: Float32Array[] = new Array(total);
 
