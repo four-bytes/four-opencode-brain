@@ -311,7 +311,20 @@ Per P48 — Open Source Github Review Automation: CI, linters, and tests are alr
 
 ## Wave: Embedding Sidecar Architecture
 
-> Status: **Planned**. Replaces node-llama-cpp (in-process) with llama.cpp server as a separate sidecar process.
+> Status: **🔄 In Progress** (EPIC #117). Replaces node-llama-cpp (in-process) with a Go sidecar binary that manages `llama-server` as a separate HTTP process. Split into 3 waves:
+> - Wave 1 (#118): Go embed-sidecar binary
+> - Wave 2 (#119): Plugin integration
+> - Wave 3 (#120): Remove node-llama-cpp
+
+### Design Decisions (v1.7.1+)
+- **Two modes only**: hash-based (default) / Go sidecar (opt-in via `BRAIN_EMBED_SIDECAR`). No in-process node-llama-cpp.
+- **Non-blocking**: `embed()` returns hash result immediately; sidecar loads async.
+- **Go binary**: Bundled via GitHub Releases prebuilt, extracted by `build.ts` (same pattern as `vec0.so`).
+- **Self-bootstrapping**: Go binary downloads `llama-server` + GGUF model on first run (cached in `~/.cache/four-opencode-brain/`).
+- **Port**: 8666, configurable via `opencode.json` and `BRAIN_EMBED_SIDECAR_PORT`.
+- **Single-instance**: Port bind detection — 2nd instance connects to existing sidecar.
+- **Idle timeout**: 30min without requests → auto-shutdown.
+- **Rich `/status`**: `{phase, progress, queue_depth}` — always responsive even during model loading.
 
 ### Goal
 OpenCode communicates with a local llama.cpp server via HTTP (OpenAI-compatible `/v1/embeddings`) instead of embedding node-llama-cpp in the main process. This eliminates init-race conditions, separates CPU-heavy embedding from the main event loop, and allows the sidecar to outlive individual OpenCode sessions.
