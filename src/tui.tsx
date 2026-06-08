@@ -4,8 +4,10 @@ import { createSignal, onMount, onCleanup } from "solid-js";
 import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui";
 import type { RGBA } from "@opentui/core";
 import { brainBus, type BrainStatusEvent } from "./event-bus";
-import { getBrainStatusFile } from "./shared";
 import { Spinner } from "./spinner";
+import { createHash } from "crypto";
+import { homedir } from "os";
+import { join } from "path";
 
 function BrainStatusBar(props: { centered?: boolean; api: TuiPluginApi }) {
   const [indicator, setIndicator] = createSignal("•");
@@ -81,15 +83,36 @@ function BrainStatusBar(props: { centered?: boolean; api: TuiPluginApi }) {
 
   onMount(() => {
     const unsub = brainBus.on("status", handleStatus);
-    const poll = async () => {
+
+    // Resolve port from discovery file, then poll HTTP endpoint
+    let statusUrl = "";
+    const hash = createHash("md5").update(props.api.state.path.directory).digest("hex").slice(0, 12);
+    const portFile = join(homedir(), ".cache", "opencode", "brain", `status-port-${hash}.json`);
+
+    const resolvePort = async () => {
       try {
-        const statusFile = getBrainStatusFile(props.api.state.path.directory);
-        const file = Bun.file(statusFile);
+        const file = Bun.file(portFile);
         if (!(await file.exists())) return;
         const data = await file.json();
-        handleStatus(data as BrainStatusEvent);
-      } catch { /* silent */ }
+        if (data.port) {
+          statusUrl = `http://127.0.0.1:${data.port}/status`;
+        }
+      } catch { /* port file not ready yet */ }
     };
+
+    const poll = async () => {
+      if (!statusUrl) {
+        await resolvePort();
+        if (!statusUrl) return;
+      }
+      try {
+        const res = await fetch(statusUrl);
+        if (!res.ok) return;
+        const data = await res.json();
+        handleStatus(data as BrainStatusEvent);
+      } catch { /* server not ready */ }
+    };
+
     poll();
     const timer = setInterval(poll, 200);
     onCleanup(() => { unsub(); clearInterval(timer); });
