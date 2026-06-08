@@ -93,14 +93,14 @@ import { BrainStatusBar } from "@four-bytes/brain-tui";
 - [ ] **Verification:** Spinner animates identically to opencode's native spinners
 
 #### A2.3 — Use `api.theme` colors
-- [ ] Replace all `setFg(GREEN)` / `setFg(RED)` / `setFg(YELLOW)` with theme equivalents
-- [ ] Map: GREEN → `theme().success`, RED → `theme().error`, YELLOW/ORANGE → `theme().warning`
-- [ ] Map: MUTED → `theme().textMuted`, accent pulse → `theme().accent`
-- [ ] Remove hardcoded color constants
-- [ ] **Verification:** Colors match the user's opencode theme
+- [x] Replace all `setFg(GREEN)` / `setFg(RED)` / `setFg(YELLOW)` with theme equivalents
+- [x] Map: GREEN → `theme().success`, RED → `theme().error`, YELLOW/ORANGE → `theme().warning`
+- [x] Map: MUTED → `theme().textMuted`, accent pulse → `theme().accent`
+- [x] Remove hardcoded color constants
+- [x] **Verification:** Colors match the user's opencode theme
 
 #### A2.4 — Extract atomic npm packages
-- [ ] **A2.4a** — Extract `@four-bytes/opencode-plugin-lib` (toast wrapper)
+- [x] **A2.4a** — Extract `@four-bytes/opencode-plugin-lib` (toast wrapper)
 - [ ] **A2.4b** — Extract `@four-bytes/brain-core` (schema, cache, logger, shared)
 - [ ] **A2.4c** — Extract `@four-bytes/brain-ingest` (walker, chunker, embed, dedup)
 - [ ] **A2.4d** — Extract `@four-bytes/brain-search` (FTS5+vec0, query parser)
@@ -113,7 +113,7 @@ import { BrainStatusBar } from "@four-bytes/brain-tui";
 
 ### Acceptance Criteria (A2)
 - [ ] No handwritten spinner array in brain code
-- [ ] No hardcoded color constants — uses `api.theme`
+- [x] No hardcoded color constants — uses `api.theme`
 - [ ] No polling loop in TUI — uses TuiEventBus
 - [ ] All 8 sub-packages extracted and independently buildable
 - [ ] `four-opencode-brain` composer passes all tests
@@ -256,7 +256,7 @@ A2 (atomic dedup + modules)
 
 | Wave | Status | Issue |
 |------|--------|-------|
-| A2 | ✅ Done | #71, #76 |
+| A2 | 🔄 In Progress | #71, #76, #98 |
 | A4 | ✅ **Done** | #69, #70 |
 | A5 | ✅ Done | #85 |
 | A6 | ✅ Done | #86 |
