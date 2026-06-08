@@ -62,7 +62,7 @@ const _serverPlugin = async (input: PluginInput) => {
   const { client, project, directory, $ } = input;
 
   sessionCache.reset();
-  initStatus(client);
+  initStatus(client, directory);
   initVersion(VERSION);
   const toast = createToast(client, "Brain 🧠"); // replaced inline with @four-bytes/opencode-plugin-lib
   log("info", "init", `v${VERSION} loaded`, { pid: process.pid });
@@ -135,7 +135,7 @@ const _serverPlugin = async (input: PluginInput) => {
         if (result.filesFound === 0) {
           const dirname = directory.split("/").filter(Boolean).pop() ?? directory;
           const msg = `🧠 Found 0 files in ${dirname} — check path`;
-          updateStatus("warning", { toast: msg.replace("🧠 ", "") });
+          updateStatus("warning", { text: msg.replace("🧠 ", ""), toast: msg.replace("🧠 ", "") });
           toast( msg.replace("🧠 ", ""), "warning", "Brain 🧠");
           log("warn", "auto-ingest", msg, {
             filesFound: result.filesFound,
@@ -147,7 +147,7 @@ const _serverPlugin = async (input: PluginInput) => {
           });
         } else {
           const msg = `🧠 Indexed ${result.filesIndexed} new, ${result.filesSkipped} skipped in ${(result.durationMs / 1000).toFixed(1)}s`;
-          updateStatus("success", { toast: msg.replace("🧠 ", "") });
+          updateStatus("success", { text: msg.replace("🧠 ", ""), toast: msg.replace("🧠 ", "") });
           toast( msg.replace("🧠 ", ""), "success", "Brain 🧠");
           log("info", "auto-ingest", msg, {
             filesFound: result.filesFound,
@@ -161,12 +161,12 @@ const _serverPlugin = async (input: PluginInput) => {
       } catch (err) {
         if (err instanceof TimeoutError) {
           const msg = `🧠 Auto-ingest timed out after ${(timeoutMs / 1000).toFixed(0)}s — partial results`;
-          updateStatus("warning", { toast: msg.replace("🧠 ", "") });
+          updateStatus("warning", { text: msg.replace("🧠 ", ""), toast: msg.replace("🧠 ", "") });
           toast( msg.replace("🧠 ", ""), "warning", "Brain 🧠");
           log("warn", "auto-ingest", msg, { directory, timeoutMs });
         } else {
           const errMsg = `🧠 Auto-ingest failed: ${String(err)}`;
-          updateStatus("error", { toast: errMsg.replace("🧠 ", "") });
+          updateStatus("error", { text: errMsg.replace("🧠 ", ""), toast: errMsg.replace("🧠 ", "") });
           toast( errMsg.replace("🧠 ", ""), "error", "Brain 🧠");
           log("error", "auto-ingest", errMsg);
         }
@@ -269,19 +269,19 @@ const _serverPlugin = async (input: PluginInput) => {
             durationMs: result.durationMs,
           },
         });
-        updateStatus("success", { toast: msg.replace("🧠 ", "") });
+        updateStatus("success", { text: msg.replace("🧠 ", ""), toast: msg.replace("🧠 ", "") });
         return JSON.stringify(result);
       } catch (err) {
         if (err instanceof TimeoutError) {
           const timeoutMsg = `🧠 Ingest timed out after ${(timeoutMs / 1000).toFixed(0)}s`;
           toolCtx.metadata({ title: timeoutMsg });
-          updateStatus("warning", { toast: timeoutMsg.replace("🧠 ", "") });
+          updateStatus("warning", { text: timeoutMsg.replace("🧠 ", ""), toast: timeoutMsg.replace("🧠 ", "") });
           log("warn", "ingest-timeout", timeoutMsg, { path: resolvedPath });
           return JSON.stringify({ error: timeoutMsg, partial: true });
         }
         const errMsg = `🧠 Ingest error: ${String(err)}`;
         toolCtx.metadata({ title: errMsg });
-        updateStatus("error", { toast: errMsg.replace("🧠 ", "") });
+        updateStatus("error", { text: errMsg.replace("🧠 ", ""), toast: errMsg.replace("🧠 ", "") });
         return JSON.stringify({ error: String(err) });
       } finally {
         db.close();
@@ -362,7 +362,7 @@ const _serverPlugin = async (input: PluginInput) => {
           embedded = await embedChunks(db, chunkIds);
         }
 
-                updateStatus("success", { toast: `Vector index rebuilt: ${embedded}/${totalChunks} chunks` });
+                updateStatus("success", { text: `Vector index rebuilt: ${embedded}/${totalChunks} chunks`, toast: `Vector index rebuilt: ${embedded}/${totalChunks} chunks` });
         return JSON.stringify({
           ok: true,
           chunks: totalChunks,
@@ -411,7 +411,7 @@ const _serverPlugin = async (input: PluginInput) => {
                 tags: args.tags as string | undefined,
                 project: args.project as string | undefined,
               });
-            updateStatus("success", { toast: "Memory stored" });
+            updateStatus("success", { text: "Memory stored", toast: "Memory stored" });
             return JSON.stringify(addResult);
           case "search":
             return JSON.stringify(
@@ -436,7 +436,7 @@ const _serverPlugin = async (input: PluginInput) => {
           case "forget":
             updateStatus("busy", { text: "Removing memory…" });
             const forgetOk = memoryForget(db, args.id as string);
-            updateStatus(forgetOk ? "success" : "error", { toast: forgetOk ? "Memory removed" : "Memory not found" });
+            updateStatus(forgetOk ? "success" : "error", { text: forgetOk ? "Memory removed" : "Memory not found", toast: forgetOk ? "Memory removed" : "Memory not found" });
             return JSON.stringify({ ok: forgetOk });
           case "diary": {
             // Auto-detect: if title + content provided → add entry; otherwise → get
@@ -522,10 +522,10 @@ const _serverPlugin = async (input: PluginInput) => {
           confidence: args.confidence as number | undefined,
           review_state: args.review_state as string | undefined,
         } satisfies KbAddInput);
-                updateStatus("success", { toast: "Knowledge entry saved" });
+                updateStatus("success", { text: "Knowledge entry saved", toast: "Knowledge entry saved" });
         return JSON.stringify(result);
       } catch (err) {
-        updateStatus("error", { toast: `kb_add failed` });
+        updateStatus("error", { text: `kb_add failed`, toast: `kb_add failed` });
         const errMsg = `kb_add failed: ${err instanceof Error ? err.message : String(err)}`;
         log("error", "kb-add", errMsg, { entry_key: args.entry_key ?? deriveEntryKey(args.title as string) });
         return JSON.stringify({ error: errMsg });
@@ -561,10 +561,10 @@ const _serverPlugin = async (input: PluginInput) => {
           observed_symptoms: args.observed_symptoms as string | undefined,
           outcome: args.outcome as "fixed" | "failed" | "workaround" | "observed",
         } satisfies KbRecordInput);
-                updateStatus("success", { toast: "Occurrence recorded" });
+                updateStatus("success", { text: "Occurrence recorded", toast: "Occurrence recorded" });
         return JSON.stringify(occurrence);
       } catch (err) {
-        updateStatus("error", { toast: `kb_record failed` });
+        updateStatus("error", { text: `kb_record failed`, toast: `kb_record failed` });
         const errMsg = `kb_record failed: ${err instanceof Error ? err.message : String(err)}`;
         log("error", "kb-record", errMsg, { entry_key: args.entry_key, kind: args.kind });
         return JSON.stringify({ error: errMsg });
@@ -592,10 +592,10 @@ const _serverPlugin = async (input: PluginInput) => {
           review_state: args.review_state as "draft" | "reviewed" | "accepted" | "rejected" | "superseded",
           confidence: args.confidence as number | undefined,
         } satisfies KbReviewInput);
-                updateStatus("success", { toast: "Review updated" });
+                updateStatus("success", { text: "Review updated", toast: "Review updated" });
         return JSON.stringify(entry);
       } catch (err) {
-        updateStatus("error", { toast: `kb_review failed` });
+        updateStatus("error", { text: `kb_review failed`, toast: `kb_review failed` });
         const errMsg = `kb_review failed: ${err instanceof Error ? err.message : String(err)}`;
         log("error", "kb-review", errMsg, { entry_key: args.entry_key, kind: args.kind });
         return JSON.stringify({ error: errMsg });

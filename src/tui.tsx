@@ -4,6 +4,7 @@ import { createSignal, onMount, onCleanup } from "solid-js";
 import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui";
 import type { RGBA } from "@opentui/core";
 import { brainBus, type BrainStatusEvent } from "./event-bus";
+import { getBrainStatusFile } from "./shared";
 import { Spinner } from "./spinner";
 
 function BrainStatusBar(props: { centered?: boolean; api: TuiPluginApi }) {
@@ -42,7 +43,7 @@ function BrainStatusBar(props: { centered?: boolean; api: TuiPluginApi }) {
         setFg(pulse % 2 === 0 ? theme().warning : theme().accent);
       } else if (data.phase === "init") {
         setBusy(true);
-        setStatus("initializing");
+        setStatus(data.statusText ?? "initializing...");
         setFg(pulse % 2 === 0 ? theme().warning : theme().accent);
       } else if (data.phase === "ingest") {
         setBusy(true);
@@ -63,7 +64,7 @@ function BrainStatusBar(props: { centered?: boolean; api: TuiPluginApi }) {
       } else if (data.phase === "idle") {
         setBusy(false);
         setIndicator("•");
-        setStatus("ready");
+        setStatus(data.statusText || "ready");
         setFg(theme().success);
       }
     } catch {
@@ -76,7 +77,18 @@ function BrainStatusBar(props: { centered?: boolean; api: TuiPluginApi }) {
 
   onMount(() => {
     const unsub = brainBus.on("status", handleStatus);
-    onCleanup(() => unsub());
+    const poll = async () => {
+      try {
+        const statusFile = getBrainStatusFile(props.api.state.path.directory);
+        const file = Bun.file(statusFile);
+        if (!(await file.exists())) return;
+        const data = await file.json();
+        handleStatus(data as BrainStatusEvent);
+      } catch { /* silent */ }
+    };
+    poll();
+    const timer = setInterval(poll, 200);
+    onCleanup(() => { unsub(); clearInterval(timer); });
   });
 
   const StatusRow = () => (
@@ -113,6 +125,8 @@ function BrainStatusBar(props: { centered?: boolean; api: TuiPluginApi }) {
     </box>
   );
 }
+
+export { BrainStatusBar };
 
 const tui: TuiPlugin = (api) => {
   api.slots.register({
