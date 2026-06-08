@@ -15,16 +15,13 @@ export interface StatusOpts {
   /** Toast variant (defaults based on state) */
   toastVariant?: "info" | "success" | "warning" | "error";
   /** Progress info for busy states */
-  progress?: number;
   current?: number;
   total?: number;
-  scanning?: boolean;
-  searching?: boolean;
-  ingesting?: boolean;
 }
 
 /** Merged state — published via event bus on every update */
-let currentStatus: Record<string, unknown> = { phase: "init", version: "" };
+const _state = { current: {} as Record<string, unknown> };
+_state.current = { status: "init", statusText: "", version: "" };
 let _version = "";
 
 let _client: PluginInput["client"] | null = null;
@@ -34,7 +31,7 @@ let _port = 0;
 /** Initialize with client for toast support */
 export function initVersion(v: string): void {
   _version = v;
-  write({ phase: "init", statusText: "initializing..." });
+  write({ status: "init", statusText: "initializing..." });
 }
 
 export function initStatus(client: PluginInput["client"], directory: string): void {
@@ -51,7 +48,7 @@ export function startStatusServer(directory: string): void {
       fetch(req) {
         const url = new URL(req.url);
         if (url.pathname === "/status") {
-          const payload = { ...currentStatus, version: _version, updated: Date.now() };
+          const payload = { ..._state.current, version: _version, updated: Date.now() };
           return new Response(JSON.stringify(payload), {
             headers: { "Content-Type": "application/json" },
           });
@@ -86,8 +83,8 @@ export function stopStatusServer(): void {
 }
 
 function write(data: Record<string, unknown>): void {
-  currentStatus = { ...currentStatus, ...data };
-  brainBus.emit("status", { ...currentStatus, version: _version } as BrainStatusEvent);
+  _state.current = { ..._state.current, ...data };
+  brainBus.emit("status", { ..._state.current, version: _version } as BrainStatusEvent);
 }
 
 /**
@@ -103,68 +100,48 @@ export function updateStatus(state: StatusState, opts?: StatusOpts): void {
   switch (state) {
     case "busy":
       write({
-        phase: "busy",
+        status: "busy",
         statusText: opts?.text ?? "",
-        progress: opts?.progress,
         current: opts?.current,
         total: opts?.total,
-        scanning: opts?.scanning ?? false,
-        searching: opts?.searching ?? false,
-        ingesting: opts?.ingesting ?? false,
-        blocked: false,
       });
       break;
 
     case "success":
       write({
-        phase: "idle",
+        status: "ready",
         statusText: opts?.text ?? "",
-        busy: false,
-        scanning: false,
-        searching: false,
-        ingesting: false,
       });
       if (opts?.toast && _client) {
-        _client?.tui.showToast({ body: { title: "Brain 🧠", message: opts.toast, variant: opts.toastVariant ?? "success", duration: 5000 } });
+        _client?.tui?.showToast({ body: { title: "Brain 🧠", message: opts.toast, variant: opts.toastVariant ?? "success", duration: 5000 } });
       }
       break;
 
     case "warning":
       write({
-        phase: "idle",
+        status: "ready",
         statusText: opts?.text ?? "",
-        busy: false,
-        scanning: false,
-        searching: false,
-        ingesting: false,
       });
       if (opts?.toast && _client) {
-        _client?.tui.showToast({ body: { title: "Brain 🧠", message: opts.toast, variant: opts.toastVariant ?? "warning", duration: 5000 } });
+        _client?.tui?.showToast({ body: { title: "Brain 🧠", message: opts.toast, variant: opts.toastVariant ?? "warning", duration: 5000 } });
       }
       break;
 
     case "error":
       write({
-        phase: "idle",
+        status: "error",
         statusText: opts?.text ?? "error occurred",
-        busy: false,
-        scanning: false,
-        searching: false,
-        ingesting: false,
+        error: opts?.text ?? "error occurred",
       });
       if (opts?.toast && _client) {
-        _client?.tui.showToast({ body: { title: "Brain 🧠", message: opts.toast, variant: "error", duration: 7000 } });
+        _client?.tui?.showToast({ body: { title: "Brain 🧠", message: opts.toast, variant: "error", duration: 7000 } });
       }
       break;
 
     case "ready":
       write({
-        phase: "idle",
+        status: "ready",
         statusText: "",
-        busy: false,
-        scanning: false,
-        searching: false,
-        ingesting: false,
       });
       break;
   }
@@ -172,5 +149,5 @@ export function updateStatus(state: StatusState, opts?: StatusOpts): void {
 
 /** Convenience wrapper for direct toast calls without status file updates */
 export function toast(msg: string, variant: "info" | "success" | "warning" | "error" = "info", _title?: string): void {
-  _client?.tui.showToast({ body: { title: "Brain 🧠", message: msg, variant, duration: variant === "error" ? 7000 : 5000 } });
+  _client?.tui?.showToast({ body: { title: "Brain 🧠", message: msg, variant, duration: variant === "error" ? 7000 : 5000 } });
 }

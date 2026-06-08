@@ -27,50 +27,25 @@ function BrainStatusBar(props: { centered?: boolean; api: TuiPluginApi }) {
       setVersion(data.version ?? "");
       pulse++;
 
-      if (data.error) {
+      if (data.status === "error") {
         setBusy(false);
         setIndicator("•");
-        setStatus("error occurred");
+        setStatus(data.error || data.statusText || "error occurred");
         setFg(theme().error);
-        return;
-      }
-
-      if (data.phase === "init") {
+      } else if (data.status === "init") {
         setBusy(true);
         setStatus(data.statusText ?? "initializing...");
-        setFg(pulse % 2 === 0 ? theme().warning : theme().accent);
-      } else if (data.scanning) {
-        setBusy(true);
-        setStatus("scanning files... " + (data.total ?? 0));
-        setFg(pulse % 2 === 0 ? theme().warning : theme().accent);
-      } else if (data.ingesting) {
-        setBusy(true);
-        setCurrent(data.current ?? 0);
-        setTotal(data.total ?? 0);
-        setPct(data.progress ?? 0);
-        setStatus("ingesting... " + (data.current ?? 0) + "/" + (data.total ?? 0) + " (" + (data.progress ?? 0).toFixed(1) + "%)");
-        setFg(pulse % 2 === 0 ? theme().warning : theme().success);
-      } else if (data.phase === "ingest") {
-        // fallback for legacy ingest phase
-        setBusy(true);
-        setCurrent(data.current ?? 0);
-        setTotal(data.total ?? 0);
-        setPct(data.progress ?? 0);
-        setStatus("ingesting... " + (data.current ?? 0) + "/" + (data.total ?? 0) + " (" + (data.progress ?? 0).toFixed(1) + "%)");
-        setFg(pulse % 2 === 0 ? theme().warning : theme().success);
-      } else if (data.searching) {
-        setBusy(true);
-        setStatus("searching...");
-        setFg(pulse % 2 === 0 ? theme().warning : theme().success);
-      } else if (data.blocked) {
-        setBusy(false);
-        setIndicator("•");
-        setStatus("ingest excluded");
         setFg(theme().warning);
-      } else if (data.phase === "idle") {
+      } else if (data.status === "busy") {
+        setBusy(true);
+        setCurrent(data.current ?? 0);
+        setTotal(data.total ?? 0);
+        setStatus(data.statusText ?? "working");
+        setFg(pulse % 2 === 0 ? theme().warning : theme().accent);
+      } else {
         setBusy(false);
         setIndicator("•");
-        setStatus(data.statusText || "ready");
+        setStatus("ready");
         setFg(theme().success);
       }
     } catch {
@@ -108,8 +83,8 @@ function BrainStatusBar(props: { centered?: boolean; api: TuiPluginApi }) {
       try {
         const res = await fetch(statusUrl);
         if (!res.ok) return;
-        const data = await res.json();
-        handleStatus(data as BrainStatusEvent);
+        const data = await res.json() as BrainStatusEvent;
+        handleStatus(data);
       } catch { /* server not ready */ }
     };
 
