@@ -306,3 +306,121 @@ Per P48 — Open Source Github Review Automation: CI, linters, and tests are alr
 | Wave | Status | Issue |
 |------|--------|-------|
 | A7 | ✅ Done | #87 |
+
+---
+
+## Wave: Embedding Sidecar Architecture
+
+> Status: **Planned**. Replaces node-llama-cpp (in-process) with llama.cpp server as a separate sidecar process.
+
+### Goal
+OpenCode communicates with a local llama.cpp server via HTTP (OpenAI-compatible `/v1/embeddings`) instead of embedding node-llama-cpp in the main process. This eliminates init-race conditions, separates CPU-heavy embedding from the main event loop, and allows the sidecar to outlive individual OpenCode sessions.
+
+### Why
+
+| Problem | Sidecar Fix |
+|---------|-------------|
+| `initialize()` race — multiple callers trigger parallel `getLlama()` | Single start via Promise-lock + cross-process lockfile |
+| Ingest batch embeddings block search queries | Separate process → separate CPU core; search uses its own HTTP connection |
+| node-llama-cpp addon conflicts in Worker threads | No addon in main process at all |
+| Process crash takes down embeddings | Sidecar is `detached` — survives parent crash/restart |
+
+### Components
+
+| Component | File | Responsibility |
+|-----------|------|----------------|
+| **EmbeddingSidecarManager** | `src/embed/sidecar/EmbeddingSidecarManager.ts` | Process lifecycle: spawn, health poll, restart, stop |
+| **LlamaCppEmbeddingClient** | `src/embed/sidecar/LlamaCppEmbeddingClient.ts` | HTTP client for `/v1/embeddings` + `/health` |
+| **Lockfile** | `src/embed/sidecar/lockfile.ts` | Cross-process start guard with PID-based stale detection |
+| **Integration** | `src/embed/embeddingService.ts` | Mode switch: `OPENCODE_EMBED_SIDECAR=true` → HTTP; else legacy node-llama-cpp |
+
+### Architecture
+
+```
+┌─────────────────────────────────┐
+│  OpenCode Process (Bun)         │
+│  ┌───────────────────────────┐  │
+│  │ EmbeddingService          │  │
+│  │  ├─ Promise-lock init    │  │
+│  │  ├─ Priority queue       │  │
+│  │  └─ HTTP client ─────────┼──┼──► POST /v1/embeddings
+│  └───────────────────────────┘  │     GET  /health
+│  ┌───────────────────────────┐  │
+│  │ SidecarManager            │  │
+│  │  ├─ spawn (detached)     │  │
+│  │  ├─ lockfile guard       │  │
+│  │  └─ health poll          │  │
+│  └───────────────────────────┘  │
+└─────────────────────────────────┘
+         │ spawn + lock
+         ▼
+┌─────────────────────────────────┐
+│  llama.cpp server (sidecar)     │
+│  Port: 8091 (configurable)      │
+│  ├─ /health    → 200/503        │
+│  └─ /v1/embeddings → vectors   │
+│  Model: all-MiniLM-L6-v2.Q8_0  │
+└─────────────────────────────────┘
+```
+
+### Health Model
+
+| State | /health response | Meaning |
+|-------|-----------------|---------|
+| `live` | Any HTTP response | Process is running, TCP port open |
+| `ready` | HTTP 200 | Model loaded, embeddings available |
+| `loading` | HTTP 503 + `"loading model"` | Live but not ready |
+| `down` | Connection refused / timeout | Process not reachable |
+
+### GPU Strategy
+
+| Config | Behavior |
+|--------|----------|
+| `off` (default) | Always CPU — `-ngl 0` (no GPU layers offloaded) |
+| `on` | Try GPU first (`-ngl 999`), fallback to CPU on failure |
+| `auto` | Detect GPU availability; if uncertain, prefer CPU |
+
+CPU always works. GPU is a bonus path with mandatory fallback.
+
+### Lockfile
+
+- Path: `/tmp/opencode-embeddings-sidecar.lock`
+- Content: `{ pid, createdAt, port, binary, model }`
+- Stale detection: PID dead OR lock > 30s old → acquire
+- Release: only if our PID matches
+
+### Configuration (env vars)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `OPENCODE_EMBED_SIDECAR` | `false` | Enable sidecar mode |
+| `OPENCODE_EMBED_HOST` | `127.0.0.1` | Sidecar bind address |
+| `OPENCODE_EMBED_PORT` | `8091` | Sidecar port |
+| `OPENCODE_EMBED_MODEL` | `~/.cache/.../all-MiniLM-L6-v2.Q8_0.gguf` | Model path |
+| `OPENCODE_EMBED_LLAMA_SERVER` | `llama-server` from PATH | Binary path |
+| `OPENCODE_EMBED_GPU` | `auto` | GPU mode |
+| `OPENCODE_EMBED_GPU_LAYERS` | `999` | GPU layers to offload |
+| `OPENCODE_EMBED_START_TIMEOUT_MS` | `15000` | Max wait for process start |
+| `OPENCODE_EMBED_READY_TIMEOUT_MS` | `120000` | Max wait for model load |
+| `OPENCODE_EMBED_LOG` | `/tmp/opencode-embed-sidecar.log` | Sidecar log file |
+
+### Integration Plan
+
+1. EmbeddingService gains `sidecar` and `sidecarClient` fields
+2. `initialize()`: when `OPENCODE_EMBED_SIDECAR=true`, create SidecarManager + Client instead of loading node-llama-cpp
+3. `embedDirect()`: swap `this.ctx.getEmbeddingFor()` → `sidecarClient.embed([text])`
+4. `dispose()`: add `sidecar.stop()` or leave running (detached)
+5. Legacy mode (node-llama-cpp) preserved as default until sidecar is stable
+
+### Test Plan
+
+- **Unit**: Lockfile stale detection, status parsing, start-guard Promise dedup
+- **Smoke**: Start sidecar → poll /health → POST /v1/embeddings → verify dimensions
+- **Manual**: CPU-only test, simulated crash recovery, optional GPU test
+
+### Acceptance Criteria
+- [ ] Sidecar starts on first embed call, survives parent restart
+- [ ] Search queries are never blocked by ingest (separate HTTP connections)
+- [ ] Lockfile prevents duplicate sidecar processes
+- [ ] GPU failure gracefully falls back to CPU
+- [ ] Legacy mode continues working unchanged
