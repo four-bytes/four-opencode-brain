@@ -14,7 +14,7 @@
     "four-bytes"
   ],
   "dependencies": {
-    "@four-bytes/opencode-plugin-lib": "github:four-bytes/opencode-plugin-lib#v0.2.0",
+    "@four-bytes/opencode-plugin-lib": "github:four-bytes/four-opencode-plugin-lib#v0.2.0",
     "@opencode-ai/plugin": "1.16.2",
     "@opentui/core": "0.3.2",
     "@opentui/solid": "0.3.2",

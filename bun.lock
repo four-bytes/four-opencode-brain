@@ -5,10 +5,10 @@
     "": {
       "name": "@four-bytes/four-opencode-brain",
       "dependencies": {
+        "@four-bytes/opencode-plugin-lib": "github:four-bytes/four-opencode-plugin-lib#v0.2.0",
         "@opencode-ai/plugin": "1.16.2",
         "@opentui/core": "0.3.2",
         "@opentui/solid": "0.3.2",
-        "@four-bytes/opencode-plugin-lib": "github:four-bytes/opencode-plugin-lib#v0.2.0",
         "node-llama-cpp": "3.18.1",
         "solid-js": "1.9.13",
         "tree-sitter-javascript": "0.25.0",
@@ -81,7 +81,7 @@
 
     "@babel/types": ["@babel/types@7.29.7", "", { "dependencies": { "@babel/helper-string-parser": "^7.29.7", "@babel/helper-validator-identifier": "^7.29.7" } }, "sha512-4zBIxpPzowiZpusoFkyGVwakdRJUyuH5PxQ/PrqghfdFWWasvnCdPfQXHrenDai+gyLARulZjZowCOj6fjT4pA=="],
 
-    "@four-bytes/opencode-plugin-lib": ["@four-bytes/opencode-plugin-lib@github:four-bytes/opencode-plugin-lib#6b8d915", { "peerDependencies": { "@opencode-ai/plugin": ">=1.16.0" } }, "four-bytes-opencode-plugin-lib-6b8d915", "sha512-bMnpphF9E+R0OuEyNKH5/ScuEXBKBJtgF0M+kigSAVEvypd1F2ZJvN6b97hSCtOqQwumLS0j/UivDnNEB4vIdw=="],
+    "@four-bytes/opencode-plugin-lib": ["@four-bytes/opencode-plugin-lib@github:four-bytes/four-opencode-plugin-lib#6b8d915", { "peerDependencies": { "@opencode-ai/plugin": ">=1.16.0" } }, "four-bytes-four-opencode-plugin-lib-6b8d915", "sha512-c5ZtV9ilcu/hoaXbizBELK0/ShWliFPng2UyBS7xbZ0IK4oso26Ysul6hEmNXZY3jDmCce/4kRc2FwPQbPV8xQ=="],
 
     "@huggingface/jinja": ["@huggingface/jinja@0.5.9", "", {}, "sha512-uWTG+l3VJRsl7EXxYizuL3P+cCPoc3cRqbWWRcQN0FhejRfbdq0RNhCmbY/YDtnTcz9icdLYuLDjsnz4d8JMuw=="],
 
