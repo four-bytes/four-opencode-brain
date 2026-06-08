@@ -84,7 +84,7 @@ import { BrainStatusBar } from "@four-bytes/brain-tui";
 - [x] In `src/tui.tsx`: subscribe to event bus instead of `setInterval(poll, 200ms)`
 - [x] Remove `POLL_MS`, `setInterval`, `onCleanup(clearInterval)` polling loop
 - [x] Remove file-based `writeFileSync` / `readFile` status mechanism
-- [x] **Verification:** Status bar updates in real time; no file I/O for status
+- [x] **Verification:** Status bar updates in real time. Note: file I/O retained as opencode runs server/TUI in separate Worker contexts — event bus is fast-path within same context, file is cross-context fallback.
 
 #### A2.2 — Use opencode `<Spinner>` component
 - [x] Remove `const SPINNER = ["⠋","⠙",…]` + `spin` variable from `tui.tsx`
