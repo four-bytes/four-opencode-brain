@@ -144,7 +144,7 @@ function BrainStatusBar(props: { centered?: boolean; api: TuiPluginApi }) {
             <text fg={theme().textMuted}> 🧠 {version()}</text>
           </box>
           <box flexDirection="row">
-            <text fg={fg()}>{indicator()}</text>
+            {busy() ? <Spinner fg={fg()} /> : <text fg={fg()}>{indicator()}</text>}
             <text fg={theme().textMuted}> {status()}</text>
           </box>
         </box>
