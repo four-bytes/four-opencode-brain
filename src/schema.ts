@@ -154,9 +154,19 @@ export function openDatabase(dbPath?: string): Database {
 
   const db = new Database(resolvedPath);
   db.exec("PRAGMA journal_mode=WAL;");
-  db.exec("PRAGMA busy_timeout=5000;");
+  db.exec("PRAGMA busy_timeout=30000;");
   db.exec("PRAGMA foreign_keys=ON;");
   return db;
+}
+
+// ---------------------------------------------------------------------------
+// WAL checkpoint — best-effort truncate to keep WAL file manageable
+// ---------------------------------------------------------------------------
+
+export function checkpointDatabase(db: Database): void {
+  try {
+    db.exec("PRAGMA wal_checkpoint(TRUNCATE);");
+  } catch { /* silent — checkpoint is best-effort */ }
 }
 
 // ---------------------------------------------------------------------------
@@ -895,4 +905,28 @@ function migrateKnowledgeFts(db: Database): void {
       }
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Retry-with-backoff wrapper for SQLITE_BUSY
+// ---------------------------------------------------------------------------
+
+/**
+ * Retry a DB operation on SQLITE_BUSY with exponential backoff.
+ * SQLITE_BUSY occurs when another connection holds a write lock beyond busy_timeout.
+ */
+export async function withDbRetry<T>(fn: () => T, maxRetries = 3): Promise<T> {
+  for (let i = 0; i <= maxRetries; i++) {
+    try {
+      return fn();
+    } catch (err: any) {
+      if (i === maxRetries) throw err;
+      if (err?.code === "SQLITE_BUSY" || String(err).includes("SQLITE_BUSY")) {
+        await new Promise(r => setTimeout(r, Math.pow(2, i) * 500)); // 500ms, 1s, 2s
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw new Error("unreachable");
 }

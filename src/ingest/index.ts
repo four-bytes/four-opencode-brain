@@ -18,7 +18,7 @@ import { stat } from "fs/promises";
 import { resolve } from "path";
 import type { Database } from "bun:sqlite";
 
-import { generateId, hashBuffer, hashContent } from "../schema";
+import { generateId, hashBuffer, hashContent, checkpointDatabase } from "../schema";
 import { log } from "../logger";
 import { ingestMutex } from "./mutex";
 import { resolveFiles, detectLanguage, isBinaryContent, type WalkResult } from "./loader";
@@ -65,21 +65,9 @@ const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
 // Progress event helpers (gated on BRAIN_DEBUG=true)
 // ---------------------------------------------------------------------------
 
-function emitProgressEvent(
-  event: string,
-  data: Record<string, unknown>,
-): void {
+function emitProgressEvent(event: string, data: Record<string, unknown>): void {
   if (process.env.BRAIN_DEBUG !== "true") return;
-  try {
-    const payload = JSON.stringify({
-      event,
-      ...data,
-      timestamp: new Date().toISOString(),
-    });
-    process.stderr.write(payload + "\n");
-  } catch {
-    // never crash on progress emission
-  }
+  log("debug", `ingest.${event}`, typeof data === "object" ? JSON.stringify(data).slice(0, 500) : String(data));
 }
 
 // ---------------------------------------------------------------------------
@@ -160,10 +148,14 @@ export async function ingestPath(
     const sp = "brain_ingest_" + generateId();
     db.exec(`SAVEPOINT ${sp}`);
 
+    // Yield so event loop can handle HTTP requests + tool calls before ingest starts
+    await new Promise(r => setTimeout(r, 0));
+
     try {
       for (const [i, walked] of walkedFiles.entries()) {
         const filePath = walked.path;
         const language = walked.language;
+        const fileStart = Date.now();
 
         emitProgressEvent("ingest.progress", {
           current: i + 1,
@@ -364,6 +356,14 @@ export async function ingestPath(
         result.filesIndexed++;
         result.filesProcessed++;
         options?.progressCallback?.({ current: result.filesProcessed, total: walkedFiles.length });
+
+        // Per-file timing debug (BRAIN_DEBUG only)
+        if (process.env.BRAIN_DEBUG === "true") {
+          log("debug", "ingest", `processed ${result.filesProcessed}/${walkedFiles.length}: ${filePath} (${Date.now() - fileStart}ms)`);
+        }
+
+        // Yield so event loop can handle HTTP requests + tool calls
+        await new Promise(r => setTimeout(r, 0));
       }
 
       // ── Commit ────────────────────────────────────────────────────────
@@ -373,6 +373,9 @@ export async function ingestPath(
       db.exec(`ROLLBACK TO SAVEPOINT ${sp}`);
       result.errors.push(`Ingest failed: ${String(err)}`);
     }
+
+    // Checkpoint WAL to keep file manageable after large ingests
+    checkpointDatabase(db);
 
     result.durationMs = Date.now() - startTime;
     emitProgressEvent("ingest.done", { result });

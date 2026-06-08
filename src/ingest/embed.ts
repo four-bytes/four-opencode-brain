@@ -106,11 +106,14 @@ export async function embedChunks(db: Database, chunkIds: string[]): Promise<num
   const embService = EmbeddingService.getInstance();
   let useRealEmbeddings = false;
   if (!embService.isAvailable() && !embService.getDimensions()) {
-    try {
-      await embService.initialize();
-      useRealEmbeddings = embService.isAvailable();
-    } catch {
-      useRealEmbeddings = false;
+    // Try real embeddings unless explicitly disabled
+    if (process.env.BRAIN_EMBED_ENABLE === "true" || process.env.BRAIN_EMBED_ENABLE === "1") {
+      try {
+        await embService.initialize();
+        useRealEmbeddings = embService.isAvailable();
+      } catch {
+        useRealEmbeddings = false;
+      }
     }
   } else {
     useRealEmbeddings = embService.isAvailable();
@@ -120,16 +123,20 @@ export async function embedChunks(db: Database, chunkIds: string[]): Promise<num
     log("warn", "embed", "Real embedding model unavailable — using hash-based pseudo-embeddings");
   }
 
-  let embedded = 0;
-
-  // Lazy-prepared statements
+  // ── Pre-scan: separate pre-cached from to-be-embedded ──────────────────
   const getStmt = db.query<{ content: string; content_hash: string }, [string]>(
     "SELECT content, content_hash FROM chunks WHERE id = ?",
   );
 
-  const insertStmt = db.query<unknown, [string, Uint8Array]>(
-    "INSERT OR IGNORE INTO chunks_vec (chunk_id, embedding) VALUES (?, ?)",
-  );
+  interface ChunkInfo {
+    chunkId: string;
+    content: string;
+    contentHash: string;
+    vec?: Float32Array;
+  }
+
+  const preCached: ChunkInfo[] = [];
+  const toEmbed: ChunkInfo[] = [];
 
   for (const chunkId of chunkIds) {
     try {
@@ -137,23 +144,67 @@ export async function embedChunks(db: Database, chunkIds: string[]): Promise<num
       if (!row) continue;
 
       const { content, content_hash } = row;
+      const info: ChunkInfo = { chunkId, content, contentHash: content_hash };
 
       // Check session cache first
-      let vec = sessionCache.embeddings.get(content_hash);
-      if (!vec) {
-        if (useRealEmbeddings) {
-          vec = await embService.embed(content);
-        } else {
-          vec = generateEmbedding(content);
-        }
-        sessionCache.embeddings.set(content_hash, vec);
+      const cachedVec = sessionCache.embeddings.get(content_hash);
+      if (cachedVec) {
+        info.vec = cachedVec;
+        preCached.push(info);
+      } else {
+        toEmbed.push(info);
       }
-
-      // Insert into vec0 — float32 blob
-      insertStmt.run(chunkId, float32ToBlob(vec));
-      embedded++;
     } catch (err) {
-      log("warn", "embed-chunk", `Failed to embed chunk ${chunkId}: ${String(err)}`);
+      log("warn", "embed-chunk", `Failed to read chunk ${chunkId}: ${String(err)}`);
+    }
+  }
+
+  // ── Batch embed all non-cached texts ──────────────────────────────────
+  if (toEmbed.length > 0) {
+    if (useRealEmbeddings) {
+      // Use batch embedding for real embeddings
+      const texts = toEmbed.map((c) => c.content);
+      try {
+        const batchResults = await embService.embedBatch(texts);
+        for (let i = 0; i < toEmbed.length; i++) {
+          const vec = batchResults[i];
+          toEmbed[i].vec = vec;
+          sessionCache.embeddings.set(toEmbed[i].contentHash, vec);
+        }
+      } catch (err) {
+        log("warn", "embed", `Batch embedding failed, falling back to per-chunk pseudo-embeddings: ${String(err)}`);
+        // Fallback: generate pseudo-embeddings individually
+        for (const chunk of toEmbed) {
+          const vec = generateEmbedding(chunk.content);
+          chunk.vec = vec;
+          sessionCache.embeddings.set(chunk.contentHash, vec);
+        }
+      }
+    } else {
+      // Generate pseudo-embeddings for each
+      for (const chunk of toEmbed) {
+        const vec = generateEmbedding(chunk.content);
+        chunk.vec = vec;
+        sessionCache.embeddings.set(chunk.contentHash, vec);
+      }
+    }
+  }
+
+  // ── Insert ALL (pre-cached + freshly embedded) into chunks_vec ────────
+  let embedded = 0;
+  const insertStmt = db.query<unknown, [string, Uint8Array]>(
+    "INSERT OR IGNORE INTO chunks_vec (chunk_id, embedding) VALUES (?, ?)",
+  );
+
+  const allChunks = [...preCached, ...toEmbed];
+  for (const chunk of allChunks) {
+    try {
+      if (chunk.vec) {
+        insertStmt.run(chunk.chunkId, float32ToBlob(chunk.vec));
+        embedded++;
+      }
+    } catch (err) {
+      log("warn", "embed-chunk", `Failed to insert embedding for chunk ${chunk.chunkId}: ${String(err)}`);
     }
   }
 

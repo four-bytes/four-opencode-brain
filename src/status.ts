@@ -58,7 +58,7 @@ export function startStatusServer(directory: string): void {
     });
   } catch (err) {
     // Fallback: if Bun.serve fails (e.g., out of FDs), TUI will use default state
-    console.error("[brain] Failed to start status server:", err);
+    _client?.app?.log({ body: { service: "brain", level: "error", message: "Failed to start status server", extra: { error: String(err) } } }).catch(() => {});
     return;
   }
   

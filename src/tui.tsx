@@ -11,7 +11,7 @@ import { join } from "path";
 
 function BrainStatusBar(props: { centered?: boolean; api: TuiPluginApi }) {
   const [indicator, setIndicator] = createSignal("•");
-  const [status, setStatus] = createSignal("");
+  const [status, setStatus] = createSignal("connecting...");
   const [version, setVersion] = createSignal("");
   const [current, setCurrent] = createSignal(0);
   const [total, setTotal] = createSignal(0);
@@ -19,11 +19,14 @@ function BrainStatusBar(props: { centered?: boolean; api: TuiPluginApi }) {
   const [fg, setFg] = createSignal<string | RGBA>("");
   const [busy, setBusy] = createSignal(false);
   let pulse = 0;
+  let lastPoll = Date.now();
 
   const theme = () => props.api.theme.current;
+  const connecting = () => (!version() || Date.now() - lastPoll > 2000) && !busy();
 
   const handleStatus = (data: BrainStatusEvent) => {
     try {
+      lastPoll = Date.now();
       setVersion(data.version ?? "");
       pulse++;
 
@@ -96,8 +99,8 @@ function BrainStatusBar(props: { centered?: boolean; api: TuiPluginApi }) {
   const StatusRow = () => (
     <box flexDirection="row">
       <text fg={theme().textMuted}>🧠 {version()} </text>
-      {busy() ? <Spinner fg={fg()} /> : <text fg={fg()}>{indicator()}</text>}
-      <text fg={theme().textMuted}> {status()}</text>
+      {busy() ? <Spinner fg={fg()} /> : <text fg={connecting() ? theme().error : fg()}>{indicator()}</text>}
+      <text fg={connecting() ? theme().error : theme().textMuted}> {connecting() ? "connecting..." : status()}</text>
     </box>
   );
 
@@ -119,8 +122,8 @@ function BrainStatusBar(props: { centered?: boolean; api: TuiPluginApi }) {
             <text fg={theme().textMuted}> 🧠 {version()}</text>
           </box>
           <box flexDirection="row">
-            {busy() ? <Spinner fg={fg()} /> : <text fg={fg()}>{indicator()}</text>}
-            <text fg={theme().textMuted}> {status()}</text>
+            {busy() ? <Spinner fg={fg()} /> : <text fg={connecting() ? theme().error : fg()}>{indicator()}</text>}
+            <text fg={connecting() ? theme().error : theme().textMuted}> {connecting() ? "connecting..." : status()}</text>
           </box>
         </box>
       )}
