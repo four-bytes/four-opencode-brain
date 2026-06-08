@@ -20,6 +20,7 @@ import type { Database } from "bun:sqlite";
 
 import { generateId, hashBuffer, hashContent } from "../schema";
 import { log } from "../logger";
+import { ingestMutex } from "./mutex";
 import { resolveFiles, detectLanguage, isBinaryContent, type WalkResult } from "./loader";
 import { chunkContent, type Chunk } from "./chunker";
 import { extractSymbols } from "./symbolExtractor";
@@ -99,279 +100,284 @@ export async function ingestPath(
   targetPath: string,
   options?: IngestOptions,
 ): Promise<IngestResult> {
-  const startTime = Date.now();
-  const result: IngestResult = {
-    filesFound: 0,
-    filesSkipped: 0,
-    filesIndexed: 0,
-    unsupported: 0,
-    chunksCreated: 0,
-    chunksEmbedded: 0,
-    documentsCreated: 0,
-    errors: [],
-    durationMs: 0,
-  };
-
-  const recursive = options?.recursive !== false;
-  const reIndex = options?.reIndex === true;
-  const projectHash = options?.project ? hashContent(options.project) : "global";
-
-  // ── 1. Resolve path ─────────────────────────────────────────────────
-  let absolutePath: string;
+  const release = await ingestMutex.acquire();
   try {
-    absolutePath = resolve(targetPath);
-    await stat(absolutePath);
-  } catch (err) {
-    result.errors.push(`Path not found: ${targetPath}`);
-    result.durationMs = Date.now() - startTime;
-    return result;
-  }
+    const startTime = Date.now();
+    const result: IngestResult = {
+      filesFound: 0,
+      filesSkipped: 0,
+      filesIndexed: 0,
+      unsupported: 0,
+      chunksCreated: 0,
+      chunksEmbedded: 0,
+      documentsCreated: 0,
+      errors: [],
+      durationMs: 0,
+    };
 
-  // ── 2. Walk files ───────────────────────────────────────────────────
-  let walkResult: WalkResult;
-  try {
-    walkResult = await resolveFiles(absolutePath, recursive);
-  } catch (err) {
-    result.errors.push(`Failed to walk path: ${String(err)}`);
-    result.durationMs = Date.now() - startTime;
-    return result;
-  }
+    const recursive = options?.recursive !== false;
+    const reIndex = options?.reIndex === true;
+    const projectHash = options?.project ? hashContent(options.project) : "global";
 
-  const walkedFiles = walkResult.files;
-  result.filesFound = walkedFiles.length;
-  result.filesProcessed = 0;
-  result.unsupported = walkResult.skippedExt;
+    // ── 1. Resolve path ─────────────────────────────────────────────────
+    let absolutePath: string;
+    try {
+      absolutePath = resolve(targetPath);
+      await stat(absolutePath);
+    } catch (err) {
+      result.errors.push(`Path not found: ${targetPath}`);
+      result.durationMs = Date.now() - startTime;
+      return result;
+    }
 
-  emitProgressEvent("ingest.start", {
-    totalFiles: walkedFiles.length,
-    targetPath: absolutePath,
-  });
+    // ── 2. Walk files ───────────────────────────────────────────────────
+    let walkResult: WalkResult;
+    try {
+      walkResult = await resolveFiles(absolutePath, recursive);
+    } catch (err) {
+      result.errors.push(`Failed to walk path: ${String(err)}`);
+      result.durationMs = Date.now() - startTime;
+      return result;
+    }
 
-  if (walkedFiles.length === 0) {
+    const walkedFiles = walkResult.files;
+    result.filesFound = walkedFiles.length;
+    result.filesProcessed = 0;
+    result.unsupported = walkResult.skippedExt;
+
+    emitProgressEvent("ingest.start", {
+      totalFiles: walkedFiles.length,
+      targetPath: absolutePath,
+    });
+
+    if (walkedFiles.length === 0) {
+      result.durationMs = Date.now() - startTime;
+      emitProgressEvent("ingest.done", { result });
+      return result;
+    }
+
+    // ── 3. SAVEPOINT: wrap the entire ingest ────────────────────────────
+    const sp = "brain_ingest_" + generateId();
+    db.exec(`SAVEPOINT ${sp}`);
+
+    try {
+      for (const [i, walked] of walkedFiles.entries()) {
+        const filePath = walked.path;
+        const language = walked.language;
+
+        emitProgressEvent("ingest.progress", {
+          current: i + 1,
+          total: walkedFiles.length,
+          file: filePath,
+        });
+
+        // ── 4. 10MB file size cap (before reading content) ───────────────
+        let fileStats;
+        try {
+          fileStats = await stat(filePath);
+        } catch (err) {
+          result.errors.push(`Failed to stat ${filePath}: ${String(err)}`);
+          continue;
+        }
+
+        if (fileStats.size > MAX_FILE_SIZE) {
+          result.errors.push(
+            `Skipped ${filePath}: file size ${fileStats.size} exceeds 10MB cap`,
+          );
+          continue;
+        }
+
+        // Read file as raw buffer — binary-safe hashing (avoids encoding issues)
+        let buf: ArrayBuffer;
+        try {
+          buf = await Bun.file(filePath).arrayBuffer();
+        } catch (err) {
+          result.errors.push(`Failed to read ${filePath}: ${String(err)}`);
+          result.filesProcessed++;
+          continue;
+        }
+
+        // Binary content guard: skip files with null bytes (safety net for misnamed binaries)
+        if (isBinaryContent(new Uint8Array(buf))) {
+          log("debug", "ingest", `Skipped binary content: ${filePath}`);
+          continue;
+        }
+
+        const contentHash = hashBuffer(new Uint8Array(buf));
+        const size = buf.byteLength;
+
+        // ── 5. Content-hash check — skip if unchanged (unless reIndex) ──
+        if (!reIndex) {
+          const existing = db
+            .query<{ content_hash: string }, []>(
+              "SELECT content_hash FROM files WHERE path = ?",
+            )
+            .get(filePath);
+
+          if (existing && existing.content_hash === contentHash) {
+            result.filesSkipped++;
+            result.filesProcessed++;
+            options?.progressCallback?.({ current: result.filesProcessed, total: walkedFiles.length });
+            continue;
+          }
+        }
+
+        // Convert buffer to text for document/chunk storage
+        const content = new TextDecoder().decode(buf);
+
+        // ── 6. Upsert files table (FK-preserving: keeps rowid for FTS5) ─
+        const fileId = generateId();
+        const mtime = Date.now();
+
+        try {
+          db.run(
+            `INSERT INTO files (id, path, content_hash, mtime, lang, size, indexed_at)
+             VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+             ON CONFLICT(path) DO UPDATE SET
+               content_hash = excluded.content_hash,
+               mtime         = excluded.mtime,
+               lang          = excluded.lang,
+               size          = excluded.size,
+               indexed_at    = datetime('now')`,
+            [fileId, filePath, contentHash, mtime, language, size],
+          );
+        } catch (err) {
+          result.errors.push(`Failed to insert file ${filePath}: ${String(err)}`);
+          continue;
+        }
+
+        // ── 7. Insert documents table ──────────────────────────────────
+        const docId = generateId();
+        const fileName = filePath.split("/").pop() ?? filePath;
+        const filetype = filePath.split(".").pop() ?? "unknown";
+
+        try {
+          db.run(
+            `INSERT OR IGNORE INTO documents (id, title, content, content_hash, type, path, language, filetype, project_hash)
+             VALUES (?, ?, ?, ?, 'file', ?, ?, ?, ?)`,
+            [docId, fileName, content, contentHash, filePath, language, filetype, projectHash],
+          );
+
+          // Check if document was actually inserted (not dedup'd)
+          const docCount = db
+            .query<{ c: number }, []>(
+              "SELECT COUNT(*) AS c FROM documents WHERE path = ? AND content_hash = ?",
+            )
+            .get(filePath, contentHash)!.c;
+
+          if (docCount > 0) {
+            result.documentsCreated++;
+          }
+        } catch (err) {
+          result.errors.push(`Failed to insert document ${filePath}: ${String(err)}`);
+          continue;
+        }
+
+        // ── 8. Chunk content (symbol extraction happens inside chunker) ──
+        const totalLines = content.split("\n").length;
+
+        let chunks: Chunk[];
+        try {
+          chunks = await chunkContent({
+            documentId: docId,
+            fileId,
+            content,
+            filePath,
+            language,
+            totalLines,
+          });
+        } catch (err) {
+          result.errors.push(`Failed to chunk ${filePath}: ${String(err)}`);
+          continue;
+        }
+
+        // ── 9. Insert chunks (includes token_count) ───────────────────────
+        // Clean up old chunks for this file before inserting new ones
+        db.run("DELETE FROM chunks WHERE file_id = ?", [fileId]);
+        const newChunkIds: string[] = [];
+        for (const chunk of chunks) {
+          try {
+            db.run(
+              `INSERT OR IGNORE INTO chunks
+               (id, document_id, file_id, chunk_index, content, content_hash,
+                symbol, kind, start_line, end_line, chunk_type, token_count)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              [
+                chunk.id,
+                chunk.documentId,
+                chunk.fileId,
+                chunk.chunkIndex,
+                chunk.content,
+                chunk.contentHash,
+                chunk.symbol,
+                chunk.kind,
+                chunk.startLine,
+                chunk.endLine,
+                chunk.chunkType,
+                chunk.tokenCount,
+              ],
+            );
+
+            result.chunksCreated++;
+            newChunkIds.push(chunk.id);
+          } catch (err) {
+            result.errors.push(
+              `Failed to insert chunk ${chunk.chunkIndex} for ${filePath}: ${String(err)}`,
+            );
+          }
+        }
+
+        // ── 10. Embed chunks (vec0) — non-fatal if unavailable ─────────
+        if (newChunkIds.length > 0 && loadVec0(db)) {
+          try {
+            const embedded = await embedChunks(db, newChunkIds);
+            result.chunksEmbedded += embedded;
+          } catch (err) {
+            result.errors.push(`Embedding failed (non-fatal): ${String(err)}`);
+          }
+        }
+
+        // ── 11. Populate symbols table (global symbol store) ─────────────
+        for (const chunk of chunks) {
+          if (chunk.symbol) {
+            try {
+              const symId = generateId();
+              db.run(
+                `INSERT OR IGNORE INTO symbols (id, name, qualified_name, kind, project_hash, file_path, document_id)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                [
+                  symId,
+                  chunk.symbol.split(".").pop() ?? chunk.symbol,
+                  chunk.symbol,
+                  chunk.kind ?? null,
+                  projectHash,
+                  filePath,
+                  docId,
+                ],
+              );
+            } catch {
+              // Silently skip symbol insertion failures
+            }
+          }
+        }
+
+        result.filesIndexed++;
+        result.filesProcessed++;
+        options?.progressCallback?.({ current: result.filesProcessed, total: walkedFiles.length });
+      }
+
+      // ── Commit ────────────────────────────────────────────────────────
+      db.exec(`RELEASE SAVEPOINT ${sp}`);
+    } catch (err) {
+      // ── Rollback on error ────────────────────────────────────────────
+      db.exec(`ROLLBACK TO SAVEPOINT ${sp}`);
+      result.errors.push(`Ingest failed: ${String(err)}`);
+    }
+
     result.durationMs = Date.now() - startTime;
     emitProgressEvent("ingest.done", { result });
     return result;
+  } finally {
+    release();
   }
-
-  // ── 3. SAVEPOINT: wrap the entire ingest ────────────────────────────
-  const sp = "brain_ingest_" + generateId();
-  db.exec(`SAVEPOINT ${sp}`);
-
-  try {
-    for (const [i, walked] of walkedFiles.entries()) {
-      const filePath = walked.path;
-      const language = walked.language;
-
-      emitProgressEvent("ingest.progress", {
-        current: i + 1,
-        total: walkedFiles.length,
-        file: filePath,
-      });
-
-      // ── 4. 10MB file size cap (before reading content) ───────────────
-      let fileStats;
-      try {
-        fileStats = await stat(filePath);
-      } catch (err) {
-        result.errors.push(`Failed to stat ${filePath}: ${String(err)}`);
-        continue;
-      }
-
-      if (fileStats.size > MAX_FILE_SIZE) {
-        result.errors.push(
-          `Skipped ${filePath}: file size ${fileStats.size} exceeds 10MB cap`,
-        );
-        continue;
-      }
-
-      // Read file as raw buffer — binary-safe hashing (avoids encoding issues)
-      let buf: ArrayBuffer;
-      try {
-        buf = await Bun.file(filePath).arrayBuffer();
-      } catch (err) {
-        result.errors.push(`Failed to read ${filePath}: ${String(err)}`);
-        result.filesProcessed++;
-        continue;
-      }
-
-      // Binary content guard: skip files with null bytes (safety net for misnamed binaries)
-      if (isBinaryContent(new Uint8Array(buf))) {
-        log("debug", "ingest", `Skipped binary content: ${filePath}`);
-        continue;
-      }
-
-      const contentHash = hashBuffer(new Uint8Array(buf));
-      const size = buf.byteLength;
-
-      // ── 5. Content-hash check — skip if unchanged (unless reIndex) ──
-      if (!reIndex) {
-        const existing = db
-          .query<{ content_hash: string }, []>(
-            "SELECT content_hash FROM files WHERE path = ?",
-          )
-          .get(filePath);
-
-        if (existing && existing.content_hash === contentHash) {
-          result.filesSkipped++;
-          result.filesProcessed++;
-          options?.progressCallback?.({ current: result.filesProcessed, total: walkedFiles.length });
-          continue;
-        }
-      }
-
-      // Convert buffer to text for document/chunk storage
-      const content = new TextDecoder().decode(buf);
-
-      // ── 6. Upsert files table (FK-preserving: keeps rowid for FTS5) ─
-      const fileId = generateId();
-      const mtime = Date.now();
-
-      try {
-        db.run(
-          `INSERT INTO files (id, path, content_hash, mtime, lang, size, indexed_at)
-           VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
-           ON CONFLICT(path) DO UPDATE SET
-             content_hash = excluded.content_hash,
-             mtime         = excluded.mtime,
-             lang          = excluded.lang,
-             size          = excluded.size,
-             indexed_at    = datetime('now')`,
-          [fileId, filePath, contentHash, mtime, language, size],
-        );
-      } catch (err) {
-        result.errors.push(`Failed to insert file ${filePath}: ${String(err)}`);
-        continue;
-      }
-
-      // ── 7. Insert documents table ──────────────────────────────────
-      const docId = generateId();
-      const fileName = filePath.split("/").pop() ?? filePath;
-      const filetype = filePath.split(".").pop() ?? "unknown";
-
-      try {
-        db.run(
-          `INSERT OR IGNORE INTO documents (id, title, content, content_hash, type, path, language, filetype, project_hash)
-           VALUES (?, ?, ?, ?, 'file', ?, ?, ?, ?)`,
-          [docId, fileName, content, contentHash, filePath, language, filetype, projectHash],
-        );
-
-        // Check if document was actually inserted (not dedup'd)
-        const docCount = db
-          .query<{ c: number }, []>(
-            "SELECT COUNT(*) AS c FROM documents WHERE path = ? AND content_hash = ?",
-          )
-          .get(filePath, contentHash)!.c;
-
-        if (docCount > 0) {
-          result.documentsCreated++;
-        }
-      } catch (err) {
-        result.errors.push(`Failed to insert document ${filePath}: ${String(err)}`);
-        continue;
-      }
-
-      // ── 8. Chunk content (symbol extraction happens inside chunker) ──
-      const totalLines = content.split("\n").length;
-
-      let chunks: Chunk[];
-      try {
-        chunks = await chunkContent({
-          documentId: docId,
-          fileId,
-          content,
-          filePath,
-          language,
-          totalLines,
-        });
-      } catch (err) {
-        result.errors.push(`Failed to chunk ${filePath}: ${String(err)}`);
-        continue;
-      }
-
-      // ── 9. Insert chunks (includes token_count) ───────────────────────
-      // Clean up old chunks for this file before inserting new ones
-      db.run("DELETE FROM chunks WHERE file_id = ?", [fileId]);
-      const newChunkIds: string[] = [];
-      for (const chunk of chunks) {
-        try {
-          db.run(
-            `INSERT OR IGNORE INTO chunks
-             (id, document_id, file_id, chunk_index, content, content_hash,
-              symbol, kind, start_line, end_line, chunk_type, token_count)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [
-              chunk.id,
-              chunk.documentId,
-              chunk.fileId,
-              chunk.chunkIndex,
-              chunk.content,
-              chunk.contentHash,
-              chunk.symbol,
-              chunk.kind,
-              chunk.startLine,
-              chunk.endLine,
-              chunk.chunkType,
-              chunk.tokenCount,
-            ],
-          );
-
-          result.chunksCreated++;
-          newChunkIds.push(chunk.id);
-        } catch (err) {
-          result.errors.push(
-            `Failed to insert chunk ${chunk.chunkIndex} for ${filePath}: ${String(err)}`,
-          );
-        }
-      }
-
-      // ── 10. Embed chunks (vec0) — non-fatal if unavailable ─────────
-      if (newChunkIds.length > 0 && loadVec0(db)) {
-        try {
-          const embedded = await embedChunks(db, newChunkIds);
-          result.chunksEmbedded += embedded;
-        } catch (err) {
-          result.errors.push(`Embedding failed (non-fatal): ${String(err)}`);
-        }
-      }
-
-      // ── 11. Populate symbols table (global symbol store) ─────────────
-      for (const chunk of chunks) {
-        if (chunk.symbol) {
-          try {
-            const symId = generateId();
-            db.run(
-              `INSERT OR IGNORE INTO symbols (id, name, qualified_name, kind, project_hash, file_path, document_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?)`,
-              [
-                symId,
-                chunk.symbol.split(".").pop() ?? chunk.symbol,
-                chunk.symbol,
-                chunk.kind ?? null,
-                projectHash,
-                filePath,
-                docId,
-              ],
-            );
-          } catch {
-            // Silently skip symbol insertion failures
-          }
-        }
-      }
-
-      result.filesIndexed++;
-      result.filesProcessed++;
-      options?.progressCallback?.({ current: result.filesProcessed, total: walkedFiles.length });
-    }
-
-    // ── Commit ────────────────────────────────────────────────────────
-    db.exec(`RELEASE SAVEPOINT ${sp}`);
-  } catch (err) {
-    // ── Rollback on error ────────────────────────────────────────────
-    db.exec(`ROLLBACK TO SAVEPOINT ${sp}`);
-    result.errors.push(`Ingest failed: ${String(err)}`);
-  }
-
-  result.durationMs = Date.now() - startTime;
-  emitProgressEvent("ingest.done", { result });
-  return result;
 }
