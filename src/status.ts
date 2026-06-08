@@ -1,7 +1,9 @@
 import { writeFileSync, mkdirSync, existsSync } from "fs";
+import { createHash } from "crypto";
+import { homedir } from "os";
+import { join } from "path";
 import type { PluginInput } from "@opencode-ai/plugin";
 import { brainBus, type BrainStatusEvent } from "./event-bus";
-import { getBrainStatusFile } from "./shared";
 
 export type StatusState = "busy" | "success" | "warning" | "error" | "ready";
 
@@ -26,7 +28,8 @@ let currentStatus: Record<string, unknown> = { phase: "init", version: "" };
 let _version = "";
 
 let _client: PluginInput["client"] | null = null;
-let _statusFile = "";
+let _server: ReturnType<typeof Bun.serve> | null = null;
+let _port = 0;
 
 /** Initialize with client for toast support */
 export function initVersion(v: string): void {
@@ -36,20 +39,55 @@ export function initVersion(v: string): void {
 
 export function initStatus(client: PluginInput["client"], directory: string): void {
   _client = client;
-  _statusFile = getBrainStatusFile(directory);
+  startStatusServer(directory);
+}
+
+export function startStatusServer(directory: string): void {
+  if (_server) return;
+  
+  try {
+    _server = Bun.serve({
+      port: 0, // OS assigns free port — no collision possible
+      fetch(req) {
+        const url = new URL(req.url);
+        if (url.pathname === "/status") {
+          const payload = { ...currentStatus, version: _version, updated: Date.now() };
+          return new Response(JSON.stringify(payload), {
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        return new Response("Not Found", { status: 404 });
+      },
+    });
+  } catch (err) {
+    // Fallback: if Bun.serve fails (e.g., out of FDs), TUI will use default state
+    console.error("[brain] Failed to start status server:", err);
+    return;
+  }
+  
+  _port = _server.port;
+  
+  // Write port to session-scoped discovery file
+  try {
+    const hash = createHash("md5").update(directory).digest("hex").slice(0, 12);
+    const portFile = join(homedir(), ".cache", "opencode", "brain", `status-port-${hash}.json`);
+    const dir = portFile.replace(/\/[^/]+$/, "");
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    writeFileSync(portFile, JSON.stringify({ port: _port }));
+  } catch { /* silently ignore */ }
+}
+
+export function stopStatusServer(): void {
+  if (_server) {
+    _server.stop();
+    _server = null;
+    _port = 0;
+  }
 }
 
 function write(data: Record<string, unknown>): void {
   currentStatus = { ...currentStatus, ...data };
-  const payload = { ...currentStatus, version: _version, updated: Date.now() };
-  brainBus.emit("status", payload as BrainStatusEvent);
-  try {
-    if (_statusFile) {
-      const dir = _statusFile.replace(/\/[^/]+$/, "");
-      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-      writeFileSync(_statusFile, JSON.stringify(payload));
-    }
-  } catch { /* never crash on status file failure */ }
+  brainBus.emit("status", { ...currentStatus, version: _version } as BrainStatusEvent);
 }
 
 /**

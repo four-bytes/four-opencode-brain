@@ -53,7 +53,7 @@ function calculateIngestTimeout(fileCount: number): number {
 }
 
 /** Unified status updates — see src/status.ts */
-import { updateStatus, initStatus, initVersion } from "./status";
+import { updateStatus, initStatus, initVersion, stopStatusServer } from "./status";
 
 
 
@@ -737,6 +737,9 @@ const _serverPlugin = async (input: PluginInput) => {
       brain_kb_review,
       brain_kb_search,
       brain_kb_stats,
+    },
+    dispose: async () => {
+      stopStatusServer();
     },
   };
 };
