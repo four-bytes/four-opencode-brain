@@ -120,7 +120,6 @@ const tui: TuiPlugin = (api) => {
     slots: {
       sidebar_content: () => <BrainStatusBar api={api} />,
       home_bottom: () => <BrainStatusBar api={api} centered />,
-      home_footer: () => <BrainStatusBar api={api} centered />,
     },
   });
   return Promise.resolve();
