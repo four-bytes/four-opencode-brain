@@ -105,8 +105,14 @@ export class EmbeddingService {
     if (this.initialized) return;
     if (this.initPromise) return this.initPromise;
 
+    log("debug", "embedding-service", "initialize() called", {
+      brainEmbedEnable: process.env.BRAIN_EMBED_ENABLE ?? "(unset)",
+      caller: new Error().stack?.split("\n")[2]?.trim().slice(0, 120),
+    });
+
     this.initPromise = (async () => {
       if (process.env.BRAIN_EMBED_ENABLE !== "true" && process.env.BRAIN_EMBED_ENABLE !== "1") {
+        log("info", "embedding-service", "BRAIN_EMBED_ENABLE not set — skipping real embedding model, using pseudo-embeddings");
         this.initialized = true;
         this._available = false;
         return;
@@ -127,6 +133,7 @@ export class EmbeddingService {
         this.model = await llama.loadModel({ modelPath: resolvedModelPath });
         this.ctx = await this.model.createEmbeddingContext();
         this._available = true;
+        log("info", "embedding-service", "BRAIN_EMBED_ENABLE=1 — real embedding model initialized successfully", { dimensions: this.dimensions || "lazy" });
         log("info", "embedding-service", "Real embedding model loaded successfully");
       } catch (err) {
         this._available = false;
