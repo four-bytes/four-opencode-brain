@@ -4,11 +4,15 @@ import { rmSync, renameSync } from "node:fs";
 rmSync("dist", { recursive: true, force: true });
 
 // 2. Server build: Bun bundler on clean dist (FIRST — no stale artifacts)
+const externals = ["@opencode-ai/*"];
+if (process.env.BRAIN_EMBED_ENABLE === "true" || process.env.BRAIN_EMBED_ENABLE === "1") {
+  externals.push("@node-llama-cpp/*");
+}
 const server = await Bun.build({
   entrypoints: ["src/four-opencode-brain.ts"],
   outdir: "dist",
   target: "bun",
-  external: ["@opencode-ai/*", "@node-llama-cpp/*"],
+  external: externals,
   minify: process.env.NODE_ENV === "production",
 });
 
