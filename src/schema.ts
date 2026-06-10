@@ -244,12 +244,37 @@ function migrateV2toV3(db: Database): void {
 }
 
 /**
+ * Read the stored schema_version from the metadata table.
+ * Returns 0 if the metadata table does not exist yet (fresh database).
+ */
+export function getSchemaVersion(db: Database): number {
+  try {
+    const row = db
+      .query<{ value: string }, []>("SELECT value FROM metadata WHERE key = 'schema_version'")
+      .get();
+    return row ? parseInt(row.value, 10) || 0 : 0;
+  } catch {
+    // metadata table may not exist yet on first run
+    return 0;
+  }
+}
+
+/**
  * Open the brain database, load the vec0 extension, create the schema,
  * run pending migrations, and perform integrity checks.
  * This is the single entry point — ensures vec0 is loaded before schema creation.
+ * Uses fast-path if schema is already up-to-date.
  */
 export function initBrainDatabase(dbPath?: string): Database {
   const db = openDatabase(dbPath);
+  const currentVersion = getSchemaVersion(db);
+  if (currentVersion >= SCHEMA_VERSION) {
+    // Fast path: schema is up-to-date, just load vec0 + integrity checks
+    loadVec0(db);
+    runIntegrityChecks(db);
+    return db;
+  }
+  // Cold path: load vec0, create schema, run migrations, integrity checks
   loadVec0(db);
   createSchema(db);
   runMigrations(db);
@@ -365,13 +390,6 @@ export function createSchema(db: Database): void {
       PRIMARY KEY (entry_key, kind)
     )
   `);
-
-  // ---- Migration: add entity_type CHECK for existing databases -----------
-  migrateConfidenceCheck(db);
-  migrateReviewStateCheck(db);
-  migrateOccurrenceOutcomeCheck(db);
-  migrateKnowledgeFts(db);
-  migrateEntityTypeCheck(db);
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS knowledge_occurrences (
