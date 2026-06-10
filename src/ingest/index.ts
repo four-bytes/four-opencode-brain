@@ -11,7 +11,7 @@
 // 8. Extract symbols (code files only, 10s timeout)
 // 9. Chunk content (token-based)
 // 10. Insert chunks (dedup via BEFORE INSERT trigger, includes token_count)
-// 11. Wrap in SAVEPOINT for atomicity
+// 11. Per-file SAVEPOINT for atomicity (individual files, not the entire ingest)
 // ---------------------------------------------------------------------------
 
 import { stat } from "fs/promises";
@@ -80,8 +80,8 @@ function emitProgressEvent(event: string, data: Record<string, unknown>): void {
  * Implements content-hash dedup: files with unchanged content are skipped.
  * New/updated files are inserted into `files`, `documents`, and `chunks` tables.
  *
- * The entire operation is wrapped in a SAVEPOINT. On error, all changes
- * are rolled back.
+ * Each file is wrapped in a per-file SAVEPOINT for atomicity. On per-file error,
+ * only that file's changes are rolled back and processing continues to the next file.
  */
 export async function ingestPath(
   db: Database,
@@ -144,15 +144,10 @@ export async function ingestPath(
       return result;
     }
 
-    // ── 3. SAVEPOINT: wrap the entire ingest ────────────────────────────
-    const sp = "brain_ingest_" + generateId();
-    db.exec(`SAVEPOINT ${sp}`);
-
     // Yield so event loop can handle HTTP requests + tool calls before ingest starts
     await new Promise(r => setTimeout(r, 0));
 
-    try {
-      for (const [i, walked] of walkedFiles.entries()) {
+    for (const [i, walked] of walkedFiles.entries()) {
         const filePath = walked.path;
         const language = walked.language;
         const fileStart = Date.now();
@@ -195,6 +190,11 @@ export async function ingestPath(
           continue;
         }
 
+        // ── Per-file SAVEPOINT for atomic DB writes ────────────────────────
+        const spFile = "brain_file_" + generateId();
+        db.exec(`SAVEPOINT ${spFile}`);
+        let fileFailed = false;
+
         const contentHash = hashBuffer(new Uint8Array(buf));
         const size = buf.byteLength;
 
@@ -207,6 +207,7 @@ export async function ingestPath(
             .get(filePath);
 
           if (existing && existing.content_hash === contentHash) {
+            db.exec(`RELEASE SAVEPOINT ${spFile}`);
             result.filesSkipped++;
             result.filesProcessed++;
             options?.progressCallback?.({ current: result.filesProcessed, total: walkedFiles.length });
@@ -234,6 +235,7 @@ export async function ingestPath(
             [fileId, filePath, contentHash, mtime, language, size],
           );
         } catch (err) {
+          db.exec(`ROLLBACK TO SAVEPOINT ${spFile}`);
           result.errors.push(`Failed to insert file ${filePath}: ${String(err)}`);
           continue;
         }
@@ -261,6 +263,7 @@ export async function ingestPath(
             result.documentsCreated++;
           }
         } catch (err) {
+          db.exec(`ROLLBACK TO SAVEPOINT ${spFile}`);
           result.errors.push(`Failed to insert document ${filePath}: ${String(err)}`);
           continue;
         }
@@ -279,6 +282,7 @@ export async function ingestPath(
             totalLines,
           });
         } catch (err) {
+          db.exec(`ROLLBACK TO SAVEPOINT ${spFile}`);
           result.errors.push(`Failed to chunk ${filePath}: ${String(err)}`);
           continue;
         }
@@ -313,10 +317,18 @@ export async function ingestPath(
             result.chunksCreated++;
             newChunkIds.push(chunk.id);
           } catch (err) {
+            db.exec(`ROLLBACK TO SAVEPOINT ${spFile}`);
             result.errors.push(
               `Failed to insert chunk ${chunk.chunkIndex} for ${filePath}: ${String(err)}`,
             );
+            fileFailed = true;
+            break;
           }
+        }
+
+        if (fileFailed) {
+          result.filesProcessed++;
+          continue;
         }
 
         // ── 10. Embed chunks (vec0) — non-fatal if unavailable ─────────
@@ -325,8 +337,15 @@ export async function ingestPath(
             const embedded = await embedChunks(db, newChunkIds);
             result.chunksEmbedded += embedded;
           } catch (err) {
-            result.errors.push(`Embedding failed (non-fatal): ${String(err)}`);
+            db.exec(`ROLLBACK TO SAVEPOINT ${spFile}`);
+            result.errors.push(`Embedding failed: ${String(err)}`);
+            fileFailed = true;
           }
+        }
+
+        if (fileFailed) {
+          result.filesProcessed++;
+          continue;
         }
 
         // ── 11. Populate symbols table (global symbol store) ─────────────
@@ -353,6 +372,9 @@ export async function ingestPath(
           }
         }
 
+        // ── RELEASE per-file SAVEPOINT ─────────────────────────────
+        db.exec(`RELEASE SAVEPOINT ${spFile}`);
+
         result.filesIndexed++;
         result.filesProcessed++;
         options?.progressCallback?.({ current: result.filesProcessed, total: walkedFiles.length });
@@ -365,14 +387,6 @@ export async function ingestPath(
         // Yield so event loop can handle HTTP requests + tool calls
         await new Promise(r => setTimeout(r, 0));
       }
-
-      // ── Commit ────────────────────────────────────────────────────────
-      db.exec(`RELEASE SAVEPOINT ${sp}`);
-    } catch (err) {
-      // ── Rollback on error ────────────────────────────────────────────
-      db.exec(`ROLLBACK TO SAVEPOINT ${sp}`);
-      result.errors.push(`Ingest failed: ${String(err)}`);
-    }
 
     // Checkpoint WAL to keep file manageable after large ingests
     checkpointDatabase(db);

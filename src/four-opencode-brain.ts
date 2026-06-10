@@ -343,22 +343,25 @@ const _serverPlugin = async (input: PluginInput) => {
       updateStatus("busy", { text: "Rebuilding vector index…" });
       const db = initBrainDatabase();
       try {
-        db.run("DROP TABLE IF EXISTS chunks_vec");
-        db.run(`
-          CREATE VIRTUAL TABLE IF NOT EXISTS chunks_vec USING vec0(
-            chunk_id TEXT PRIMARY KEY,
-            embedding FLOAT[384]
-          )
-        `);
+        // Sync DB operations wrapped with retry for SQLITE_BUSY resilience
+        const chunkIds = await withDbRetry(() => {
+          db.run("DROP TABLE IF EXISTS chunks_vec");
+          db.run(`
+            CREATE VIRTUAL TABLE IF NOT EXISTS chunks_vec USING vec0(
+              chunk_id TEXT PRIMARY KEY,
+              embedding FLOAT[384]
+            )
+          `);
 
-        const chunkRows = db.query<{ id: string }, []>(
-          "SELECT id FROM chunks",
-        ).all();
-        const totalChunks = chunkRows.length;
+          const chunkRows = db.query<{ id: string }, []>(
+            "SELECT id FROM chunks",
+          ).all();
+          return chunkRows.map((r) => r.id);
+        });
 
+        const totalChunks = chunkIds.length;
         let embedded = 0;
         if (totalChunks > 0 && loadVec0(db)) {
-          const chunkIds = chunkRows.map((r) => r.id);
           embedded = await embedChunks(db, chunkIds);
         }
 
@@ -514,7 +517,7 @@ const _serverPlugin = async (input: PluginInput) => {
       const db = initBrainDatabase();
       try {
                 updateStatus("busy", { text: "Saving knowledge entry…" });
-        const result = kbAdd(db, {
+        const result = await withDbRetry(() => kbAdd(db, {
           entry_key: (args.entry_key as string) ?? deriveEntryKey(args.title as string),
           kind: (args.kind as string) ?? "problem",
           title: args.title as string,
@@ -525,7 +528,7 @@ const _serverPlugin = async (input: PluginInput) => {
           tags: args.tags as string | undefined,
           confidence: args.confidence as number | undefined,
           review_state: args.review_state as string | undefined,
-        } satisfies KbAddInput);
+        } satisfies KbAddInput));
                 updateStatus("success", { text: "Knowledge entry saved", toast: "Knowledge entry saved" });
         return JSON.stringify(result);
       } catch (err) {
@@ -555,7 +558,7 @@ const _serverPlugin = async (input: PluginInput) => {
       const db = initBrainDatabase();
       try {
                 updateStatus("busy", { text: "Recording occurrence…" });
-        const occurrence = kbRecord(db, {
+        const occurrence = await withDbRetry(() => kbRecord(db, {
           entry_key: args.entry_key as string,
           kind: args.kind as string,
           project_ref: args.project_ref as string | undefined,
@@ -564,7 +567,7 @@ const _serverPlugin = async (input: PluginInput) => {
           commit_ref: args.commit_ref as string | undefined,
           observed_symptoms: args.observed_symptoms as string | undefined,
           outcome: args.outcome as "fixed" | "failed" | "workaround" | "observed",
-        } satisfies KbRecordInput);
+        } satisfies KbRecordInput));
                 updateStatus("success", { text: "Occurrence recorded", toast: "Occurrence recorded" });
         return JSON.stringify(occurrence);
       } catch (err) {
@@ -590,12 +593,12 @@ const _serverPlugin = async (input: PluginInput) => {
       const db = initBrainDatabase();
       try {
                 updateStatus("busy", { text: "Updating review…" });
-        const entry = kbReview(db, {
+        const entry = await withDbRetry(() => kbReview(db, {
           entry_key: args.entry_key as string,
           kind: args.kind as string,
           review_state: args.review_state as "draft" | "reviewed" | "accepted" | "rejected" | "superseded",
           confidence: args.confidence as number | undefined,
-        } satisfies KbReviewInput);
+        } satisfies KbReviewInput));
                 updateStatus("success", { text: "Review updated", toast: "Review updated" });
         return JSON.stringify(entry);
       } catch (err) {
