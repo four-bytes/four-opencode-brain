@@ -4,7 +4,7 @@
 // 1. Resolve path
 // 2. Walk files (recursive if dir, single if file)
 // 3. Detect language from extension
-// 4. 10MB file size cap (skip oversized files, never read content → avoid OOM)
+// 4. 2MB file size cap (skip oversized files, never read content → avoid OOM)
 // 5. Content-hash check against files table → skip unchanged
 // 6. Upsert files table (FK-preserving: ON CONFLICT DO UPDATE, keeps rowid)
 // 7. Insert documents table (dedup via BEFORE INSERT trigger)
@@ -58,8 +58,8 @@ export interface IngestOptions {
 // Constants
 // ---------------------------------------------------------------------------
 
-/** Maximum file size for ingestion (10 MB). Files larger than this are skipped. */
-const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
+/** Maximum file size for ingestion (2 MB). Files larger than this are skipped. */
+const MAX_FILE_SIZE = 2 * 1024 * 1024; // 2 MB
 
 /** Per-file processing timeout (10 seconds). */
 const FILE_TIMEOUT_MS = 10_000; // 10 seconds per file
@@ -147,6 +147,18 @@ export async function ingestPath(
       return result;
     }
 
+    // ── File-count guard: warn at 500, hard-abort at 5000 ──────────────
+    const FILE_COUNT_WARN = 500;
+    const FILE_COUNT_ABORT = 5000;
+    if (walkedFiles.length > FILE_COUNT_ABORT) {
+      result.errors.push(`Aborted: ${walkedFiles.length} files found — exceeds hard limit of ${FILE_COUNT_ABORT}. Use a more specific path.`);
+      result.durationMs = Date.now() - startTime;
+      return result;
+    }
+    if (walkedFiles.length > FILE_COUNT_WARN) {
+      log("warn", "ingest", `Large ingest: ${walkedFiles.length} files — may take a while`);
+    }
+
     // Yield so event loop can handle HTTP requests + tool calls before ingest starts
     await new Promise(r => setTimeout(r, 0));
 
@@ -161,7 +173,7 @@ export async function ingestPath(
           file: filePath,
         });
 
-        // ── 4. 10MB file size cap (before reading content) ───────────────
+        // ── 4. 2MB file size cap (before reading content) ───────────────
         let fileStats;
         try {
           fileStats = await stat(filePath);
@@ -172,7 +184,7 @@ export async function ingestPath(
 
         if (fileStats.size > MAX_FILE_SIZE) {
           result.errors.push(
-            `Skipped ${filePath}: file size ${fileStats.size} exceeds 10MB cap`,
+            `Skipped ${filePath}: file size ${fileStats.size} exceeds 2MB cap`,
           );
           return;
         }

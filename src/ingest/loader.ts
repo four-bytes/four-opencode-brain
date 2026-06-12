@@ -36,6 +36,11 @@ const SKIP_DIRS = new Set([
   "target",
   "zig-cache",
   "zig-out",
+  ".opencode",
+  "docker",
+  "var",
+  "bundles",
+  "db-dumps",
 ]);
 
 const EXTENSION_LANG_MAP: Record<string, string> = {
@@ -119,6 +124,7 @@ const EXTENSION_LANG_MAP: Record<string, string> = {
   ".zsh": "shell",
   ".ps1": "powershell",
   ".sql": "sql",
+  ".twig": "twig",
 };
 
 const BINARY_EXTENSIONS = new Set([
