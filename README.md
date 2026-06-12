@@ -1,5 +1,9 @@
 # 🧠 four-opencode-brain
 
+[![npm](https://img.shields.io/npm/v/@four-bytes/four-opencode-brain)](https://www.npmjs.com/package/@four-bytes/four-opencode-brain)
+[![license](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
+[![bun](https://img.shields.io/badge/runtime-bun-orange)](https://bun.sh)
+
 **Unified brain plugin for [opencode](https://github.com/sst/opencode)** — single SQLite database for RAG search, memory, and knowledge base.
 
 [![npm](https://img.shields.io/npm/v/@four-bytes/four-opencode-brain)](https://www.npmjs.com/package/@four-bytes/four-opencode-brain)
@@ -101,3 +105,7 @@ src/
 ## License
 
 Apache-2.0 © [Four Bytes / Four Flames GmbH & Co. KG](https://fourbytes.de)
+
+---
+
+> If this plugin saves you tokens, consider leaving a ⭐ on [GitHub](https://github.com/four-bytes/four-opencode-brain).
