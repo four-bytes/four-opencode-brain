@@ -62,7 +62,10 @@ export interface IngestOptions {
 const MAX_FILE_SIZE = 2 * 1024 * 1024; // 2 MB
 
 /** Per-file processing timeout (10 seconds). */
-const FILE_TIMEOUT_MS = 10_000; // 10 seconds per file
+const FILE_TIMEOUT_MS = 30_000; // 30 seconds per file
+
+/** Files exceeding this duration get logged to app.log as a warning. */
+const SLOW_FILE_WARN_MS = 30_000; // 30 seconds
 
 // ---------------------------------------------------------------------------
 // Progress event helpers (gated on BRAIN_DEBUG=true)
@@ -398,6 +401,12 @@ export async function ingestPath(
         if (process.env.BRAIN_DEBUG === "true") {
           log("debug", "ingest", `processed ${result.filesProcessed}/${walkedFiles.length}: ${filePath} (${Date.now() - fileStart}ms)`);
         }
+
+        // Slow-file warning: log to app.log for diagnostics
+        const elapsed = Date.now() - fileStart;
+        if (elapsed > SLOW_FILE_WARN_MS) {
+          log("warn", `ingest.slow_file.${filePath}`, `${filePath} took ${elapsed}ms`, { path: filePath, durationMs: elapsed, size });
+        }
     }
 
     for (const [i, walked] of walkedFiles.entries()) {
@@ -409,7 +418,7 @@ export async function ingestPath(
         } catch (err) {
             if (err instanceof Error && err.message === 'timeout') {
                 emitProgressEvent("ingest.file_timeout", { file: walked.path });
-                result.errors.push(`Timeout processing ${walked.path}: exceeded ${FILE_TIMEOUT_MS}ms`);
+                log("warn", "ingest.timeout", `Timeout processing ${walked.path}: exceeded ${FILE_TIMEOUT_MS}ms`, { path: walked.path, timeoutMs: FILE_TIMEOUT_MS });
                 result.filesProcessed++;
                 continue;
             }
