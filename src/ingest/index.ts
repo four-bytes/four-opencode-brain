@@ -61,6 +61,9 @@ export interface IngestOptions {
 /** Maximum file size for ingestion (10 MB). Files larger than this are skipped. */
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
 
+/** Per-file processing timeout (10 seconds). */
+const FILE_TIMEOUT_MS = 10_000; // 10 seconds per file
+
 // ---------------------------------------------------------------------------
 // Progress event helpers (gated on BRAIN_DEBUG=true)
 // ---------------------------------------------------------------------------
@@ -147,7 +150,7 @@ export async function ingestPath(
     // Yield so event loop can handle HTTP requests + tool calls before ingest starts
     await new Promise(r => setTimeout(r, 0));
 
-    for (const [i, walked] of walkedFiles.entries()) {
+    async function processFile(walked: WalkResult, i: number): Promise<void> {
         const filePath = walked.path;
         const language = walked.language;
         const fileStart = Date.now();
@@ -164,14 +167,14 @@ export async function ingestPath(
           fileStats = await stat(filePath);
         } catch (err) {
           result.errors.push(`Failed to stat ${filePath}: ${String(err)}`);
-          continue;
+          return;
         }
 
         if (fileStats.size > MAX_FILE_SIZE) {
           result.errors.push(
             `Skipped ${filePath}: file size ${fileStats.size} exceeds 10MB cap`,
           );
-          continue;
+          return;
         }
 
         // Read file as raw buffer — binary-safe hashing (avoids encoding issues)
@@ -181,13 +184,13 @@ export async function ingestPath(
         } catch (err) {
           result.errors.push(`Failed to read ${filePath}: ${String(err)}`);
           result.filesProcessed++;
-          continue;
+          return;
         }
 
         // Binary content guard: skip files with null bytes (safety net for misnamed binaries)
         if (isBinaryContent(new Uint8Array(buf))) {
           log("debug", "ingest", `Skipped binary content: ${filePath}`);
-          continue;
+          return;
         }
 
         // ── Per-file SAVEPOINT for atomic DB writes ────────────────────────
@@ -211,7 +214,7 @@ export async function ingestPath(
             result.filesSkipped++;
             result.filesProcessed++;
             options?.progressCallback?.({ current: result.filesProcessed, total: walkedFiles.length });
-            continue;
+            return;
           }
         }
 
@@ -237,7 +240,7 @@ export async function ingestPath(
         } catch (err) {
           db.exec(`ROLLBACK TO SAVEPOINT ${spFile}`);
           result.errors.push(`Failed to insert file ${filePath}: ${String(err)}`);
-          continue;
+          return;
         }
 
         // ── 7. Insert documents table ──────────────────────────────────
@@ -265,7 +268,7 @@ export async function ingestPath(
         } catch (err) {
           db.exec(`ROLLBACK TO SAVEPOINT ${spFile}`);
           result.errors.push(`Failed to insert document ${filePath}: ${String(err)}`);
-          continue;
+          return;
         }
 
         // ── 8. Chunk content (symbol extraction happens inside chunker) ──
@@ -284,7 +287,7 @@ export async function ingestPath(
         } catch (err) {
           db.exec(`ROLLBACK TO SAVEPOINT ${spFile}`);
           result.errors.push(`Failed to chunk ${filePath}: ${String(err)}`);
-          continue;
+          return;
         }
 
         // ── 9. Insert chunks (includes token_count) ───────────────────────
@@ -328,7 +331,7 @@ export async function ingestPath(
 
         if (fileFailed) {
           result.filesProcessed++;
-          continue;
+          return;
         }
 
         // ── 10. Embed chunks (vec0) — non-fatal if unavailable ─────────
@@ -345,7 +348,7 @@ export async function ingestPath(
 
         if (fileFailed) {
           result.filesProcessed++;
-          continue;
+          return;
         }
 
         // ── 11. Populate symbols table (global symbol store) ─────────────
@@ -383,10 +386,27 @@ export async function ingestPath(
         if (process.env.BRAIN_DEBUG === "true") {
           log("debug", "ingest", `processed ${result.filesProcessed}/${walkedFiles.length}: ${filePath} (${Date.now() - fileStart}ms)`);
         }
+    }
+
+    for (const [i, walked] of walkedFiles.entries()) {
+        try {
+            await Promise.race([
+                processFile(walked, i),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), FILE_TIMEOUT_MS))
+            ]);
+        } catch (err) {
+            if (err instanceof Error && err.message === 'timeout') {
+                emitProgressEvent("ingest.file_timeout", { file: walked.path });
+                result.errors.push(`Timeout processing ${walked.path}: exceeded ${FILE_TIMEOUT_MS}ms`);
+                result.filesProcessed++;
+                continue;
+            }
+            throw err;
+        }
 
         // Yield so event loop can handle HTTP requests + tool calls
         await new Promise(r => setTimeout(r, 0));
-      }
+    }
 
     // Checkpoint WAL to keep file manageable after large ingests
     checkpointDatabase(db);
