@@ -4,6 +4,7 @@ import { createSignal, onMount, onCleanup } from "solid-js";
 import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui";
 import type { RGBA } from "@opentui/core";
 import { BusTui } from "@four-bytes/opencode-plugin-lib/tui";
+import { ProgressBar } from "@four-bytes/opencode-plugin-lib/tui-components";
 import type { BrainStatusEvent } from "./event-bus";
 import { Spinner } from "./spinner";
 import { createHash } from "crypto";
@@ -146,6 +147,9 @@ function BrainStatusBar(props: { centered?: boolean; api: TuiPluginApi; sessionI
             {busy() ? <Spinner fg={fg()} /> : <text fg={connecting() ? theme().error : fg()}>{indicator()}</text>}
             <text fg={connecting() ? theme().error : theme().textMuted}> {connecting() ? "connecting..." : status()}</text>
           </box>
+          {current() > 0 && total() > 0 && (
+            <ProgressBar current={current()} total={total()} />
+          )}
         </box>
       )}
     </box>
