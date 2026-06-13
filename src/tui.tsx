@@ -47,7 +47,7 @@ function BrainStatusBar(props: { centered?: boolean; api: TuiPluginApi; sessionI
         setBusy(true);
         setCurrent(data.current ?? 0);
         setTotal(data.total ?? 0);
-        setStatus(data.statusText ?? "working");
+        setStatus(data.statusText?.replace(/\s*\d+\/\d+\s*(files?)?\s*\.{3}?$/i, '') ?? "working");
         setFg(pulse % 2 === 0 ? theme().warning : theme().accent);
       } else {
         setCurrent(0);
