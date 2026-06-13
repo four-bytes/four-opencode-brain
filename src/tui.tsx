@@ -10,7 +10,7 @@ import { createHash } from "crypto";
 import { homedir } from "os";
 import { join } from "path";
 
-function BrainStatusBar(props: { centered?: boolean; api: TuiPluginApi }) {
+function BrainStatusBar(props: { centered?: boolean; api: TuiPluginApi; sessionId?: string }) {
   const [indicator, setIndicator] = createSignal("•");
   const [status, setStatus] = createSignal("connecting...");
   const [version, setVersion] = createSignal("");
@@ -75,7 +75,8 @@ function BrainStatusBar(props: { centered?: boolean; api: TuiPluginApi }) {
     BusTui.connect()
       .then((b) => {
         bus = b;
-        unsub = b.subscribe("brain/status", (envelope) => {
+        const channel = `brain/${props.sessionId || "unknown"}`;
+        unsub = b.subscribe(channel, (envelope) => {
           handleStatus(envelope.payload as BrainStatusEvent);
         });
       })
@@ -157,7 +158,7 @@ const tui: TuiPlugin = (api) => {
   api.slots.register({
     order: 60, // below deepseek-meter (55)
     slots: {
-      sidebar_content: () => <BrainStatusBar api={api} />,
+      sidebar_content: (_ctx: any, props: any) => <BrainStatusBar api={api} sessionId={props.session_id} />,
       home_bottom: () => <BrainStatusBar api={api} centered />,
     },
   });

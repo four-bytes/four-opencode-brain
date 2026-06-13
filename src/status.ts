@@ -24,6 +24,8 @@ export interface StatusOpts {
 const _state = { current: {} as Record<string, unknown> };
 _state.current = { status: "init", statusText: "", version: "" };
 let _version = "";
+let _sessionId = "";
+let _channel = "brain/status";
 
 let _client: PluginInput["client"] | null = null;
 let _server: ReturnType<typeof Bun.serve> | null = null;
@@ -34,6 +36,12 @@ let _busPromise: Promise<BusClient> | null = null;
 export function initVersion(v: string): void {
   _version = v;
   write({ status: "init", statusText: "initializing..." });
+}
+
+export function setSessionId(id: string): void {
+  if (id === _sessionId) return;
+  _sessionId = id;
+  _channel = `brain/${id}`;
 }
 
 export function initStatus(client: PluginInput["client"], directory: string): void {
@@ -100,7 +108,7 @@ function write(data: Record<string, unknown>): void {
 
   // Real-time push via plugin bus (HTTP fallback still serves status endpoint)
   getBus()
-    .then((bus) => bus.publish("brain/status", payload))
+    .then((bus) => bus.publish(_channel, payload))
     .catch((err) => {
       console.warn("[brain] Bus publish failed:", (err as Error).message);
     });

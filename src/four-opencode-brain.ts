@@ -53,7 +53,7 @@ function calculateIngestTimeout(fileCount: number): number {
 }
 
 /** Unified status updates — see src/status.ts */
-import { updateStatus, initStatus, initVersion, stopStatusServer, toast } from "./status";
+import { updateStatus, initStatus, initVersion, setSessionId, stopStatusServer, toast } from "./status";
 
 
 
@@ -691,6 +691,7 @@ const _serverPlugin = async (input: PluginInput) => {
       output.system.push(brainSystemPrompt());
     },
     "chat.message": async (_hookInput, output) => {
+      if (_hookInput?.sessionID) setSessionId(_hookInput.sessionID);
       if (output.message?.role === "user" && output.message?.content) {
         const stored = await onChatMessage(input, output.message as { role: string; content: string });
         if (stored && output.parts) {
