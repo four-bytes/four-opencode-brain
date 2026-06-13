@@ -3,7 +3,8 @@
 import { createSignal, onMount, onCleanup } from "solid-js";
 import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui";
 import type { RGBA } from "@opentui/core";
-import { brainBus, type BrainStatusEvent } from "./event-bus";
+import { BusTui } from "@four-bytes/opencode-plugin-lib/tui";
+import type { BrainStatusEvent } from "./event-bus";
 import { Spinner } from "./spinner";
 import { createHash } from "crypto";
 import { homedir } from "os";
@@ -60,9 +61,29 @@ function BrainStatusBar(props: { centered?: boolean; api: TuiPluginApi }) {
   };
 
   onMount(() => {
-    const unsub = brainBus.on("status", handleStatus);
+    let bus: BusTui | null = null;
+    let unsub: (() => void) | null = null;
+    let timer: ReturnType<typeof setInterval> | null = null;
 
-    // Resolve port from discovery file, then poll HTTP endpoint
+    onCleanup(() => {
+      unsub?.();
+      bus?.close();
+      if (timer) clearInterval(timer);
+    });
+
+    // Real-time WebSocket subscription via plugin bus
+    BusTui.connect()
+      .then((b) => {
+        bus = b;
+        unsub = b.subscribe("brain/status", (envelope) => {
+          handleStatus(envelope.payload as BrainStatusEvent);
+        });
+      })
+      .catch((err) => {
+        console.warn("[brain TUI] BusTui connect failed:", (err as Error).message);
+      });
+
+    // HTTP fallback for when bus is unavailable (cross-process)
     let statusUrl = "";
     const hash = createHash("md5").update(props.api.state.path.directory).digest("hex").slice(0, 12);
     const portFile = join(homedir(), ".cache", "opencode", "brain", `status-port-${hash}.json`);
@@ -92,8 +113,7 @@ function BrainStatusBar(props: { centered?: boolean; api: TuiPluginApi }) {
     };
 
     poll();
-    const timer = setInterval(poll, 200);
-    onCleanup(() => { unsub(); clearInterval(timer); });
+    timer = setInterval(poll, 200);
   });
 
   const StatusRow = () => (

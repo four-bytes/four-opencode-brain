@@ -3,7 +3,8 @@ import { createHash } from "crypto";
 import { homedir } from "os";
 import { join } from "path";
 import type { PluginInput } from "@opencode-ai/plugin";
-import { brainBus, type BrainStatusEvent } from "./event-bus";
+import { BusClient } from "@four-bytes/opencode-plugin-lib";
+import type { BrainStatusEvent } from "./event-bus";
 
 export type StatusState = "busy" | "success" | "warning" | "error" | "ready";
 
@@ -27,6 +28,7 @@ let _version = "";
 let _client: PluginInput["client"] | null = null;
 let _server: ReturnType<typeof Bun.serve> | null = null;
 let _port = 0;
+let _busPromise: Promise<BusClient> | null = null;
 
 /** Initialize with client for toast support */
 export function initVersion(v: string): void {
@@ -37,6 +39,16 @@ export function initVersion(v: string): void {
 export function initStatus(client: PluginInput["client"], directory: string): void {
   _client = client;
   startStatusServer(directory);
+}
+
+function getBus(): Promise<BusClient> {
+  if (!_busPromise) {
+    _busPromise = BusClient.connect().catch((err) => {
+      console.warn("[brain] BusClient connect failed:", (err as Error).message);
+      throw err;
+    });
+  }
+  return _busPromise;
 }
 
 export function startStatusServer(directory: string): void {
@@ -84,7 +96,14 @@ export function stopStatusServer(): void {
 
 function write(data: Record<string, unknown>): void {
   _state.current = { ..._state.current, ...data };
-  brainBus.emit("status", { ..._state.current, version: _version } as BrainStatusEvent);
+  const payload = { ..._state.current, version: _version } as BrainStatusEvent;
+
+  // Real-time push via plugin bus (HTTP fallback still serves status endpoint)
+  getBus()
+    .then((bus) => bus.publish("brain/status", payload))
+    .catch((err) => {
+      console.warn("[brain] Bus publish failed:", (err as Error).message);
+    });
 }
 
 /**
