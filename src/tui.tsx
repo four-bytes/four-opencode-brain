@@ -127,6 +127,12 @@ function BrainStatusBar(props: { centered?: boolean; api: TuiPluginApi; sessionI
       <text fg={theme().textMuted}>🧠 {version()} </text>
       {busy() ? <Spinner fg={fg()} /> : <text fg={connecting() ? theme().error : fg()}>{indicator()}</text>}
       <text fg={connecting() ? theme().error : theme().textMuted}> {connecting() ? "connecting..." : status()}</text>
+      {current() > 0 && total() > 0 && (
+        <text> </text>
+      )}
+      {current() > 0 && total() > 0 && (
+        <ProgressBar current={current()} total={total()} showLabel={false} />
+      )}
     </box>
   );
 
@@ -150,10 +156,13 @@ function BrainStatusBar(props: { centered?: boolean; api: TuiPluginApi; sessionI
           <box flexDirection="row">
             {busy() ? <Spinner fg={fg()} /> : <text fg={connecting() ? theme().error : fg()}>{indicator()}</text>}
             <text fg={connecting() ? theme().error : theme().textMuted}> {connecting() ? "connecting..." : status()}</text>
+            {current() > 0 && total() > 0 && (
+              <text> </text>
+            )}
+            {current() > 0 && total() > 0 && (
+              <ProgressBar current={current()} total={total()} showLabel={false} />
+            )}
           </box>
-          {current() > 0 && total() > 0 && (
-            <ProgressBar current={current()} total={total()} />
-          )}
         </box>
       )}
     </box>
