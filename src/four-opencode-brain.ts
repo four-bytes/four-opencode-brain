@@ -97,20 +97,20 @@ const _serverPlugin = async (input: PluginInput) => {
     // Fire-and-forget — don't block plugin readiness
     (async () => {
       // Signal TUI we're scanning the directory tree
-      updateStatus("busy", { text: "scanning files...", total: 0 });
+      updateStatus("busy", { text: "scanning files…", total: 0 });
 
       // Quick preliminary file count for toast + timeout calculation
       let fileCount = 0;
       try {
         const walked = await resolveFiles(directory, true);
         fileCount = walked.files.length;
-        updateStatus("busy", { text: `scanning files... ${fileCount}`, total: fileCount });
+        updateStatus("busy", { text: `scanning files… ${fileCount}`, total: fileCount });
         const timeoutS = (calculateIngestTimeout(fileCount) / 1000).toFixed(0);
         toast( `Indexing ${fileCount} files… (timeout: ${timeoutS}s)`, "info", "Brain 🧠");
-        updateStatus("busy", { text: `ingesting... 0/${fileCount}`, current: 0, total: fileCount });
+        updateStatus("busy", { text: `ingesting…`, current: 0, total: fileCount });
       } catch {
         toast( `Indexing ${project?.name ?? "project"}…`, "info", "Brain 🧠");
-        updateStatus("busy", { text: "ingesting..." });
+        updateStatus("busy", { text: "ingesting…" });
       }
 
       const ingestDb = initBrainDatabase();
@@ -123,7 +123,7 @@ const _serverPlugin = async (input: PluginInput) => {
             project: directory,
             progressCallback: ({ current, total }) => {
               // Update status file every tick so TUI spinner stays live
-              updateStatus("busy", { text: `ingesting... ${current}/${total}`, current, total });
+              updateStatus("busy", { text: `ingesting…`, current, total });
             },
           }),
           timeoutMs,
@@ -250,7 +250,7 @@ const _serverPlugin = async (input: PluginInput) => {
             project: toolCtx.directory,
             progressCallback: ({ current, total }) => {
               // Update status file every tick so TUI spinner stays live
-              updateStatus("busy", { text: `ingesting... ${current}/${total}`, current, total });
+              updateStatus("busy", { text: `ingesting…`, current, total });
             },
           }),
           timeoutMs,
@@ -295,7 +295,7 @@ const _serverPlugin = async (input: PluginInput) => {
       project: s.string().optional().describe("Project name or hash to scope search"),
     },
     execute: async (args, toolCtx) => {
-      updateStatus("busy", { text: "searching..." });
+      updateStatus("busy", { text: "searching…" });
       const db = initBrainDatabase();
       try {
         const results = await withTimeout(
