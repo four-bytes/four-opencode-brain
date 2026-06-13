@@ -40,6 +40,8 @@ function BrainStatusBar(props: { centered?: boolean; api: TuiPluginApi; sessionI
       } else if (data.status === "init") {
         setBusy(true);
         setStatus(data.statusText ?? "initializing...");
+        setCurrent(0);
+        setTotal(0);
         setFg(theme().warning);
       } else if (data.status === "busy") {
         setBusy(true);
@@ -48,6 +50,8 @@ function BrainStatusBar(props: { centered?: boolean; api: TuiPluginApi; sessionI
         setStatus(data.statusText ?? "working");
         setFg(pulse % 2 === 0 ? theme().warning : theme().accent);
       } else {
+        setCurrent(0);
+        setTotal(0);
         setBusy(false);
         setIndicator("•");
         setStatus("ready");
