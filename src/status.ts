@@ -42,6 +42,16 @@ export function setSessionId(id: string): void {
   if (id === _sessionId) return;
   _sessionId = id;
   _channel = `brain/${id}`;
+
+  if (_port > 0) {
+    try {
+      const hash = createHash("sha256").update(id).digest("hex").slice(0, 12);
+      const portFile = join(homedir(), ".cache", "opencode", "brain", `status-port-${hash}.json`);
+      const dir = portFile.replace(/\/[^/]+$/, "");
+      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+      writeFileSync(portFile, JSON.stringify({ port: _port }));
+    } catch { /* ignore */ }
+  }
 }
 
 export function initStatus(client: PluginInput["client"], directory: string): void {
