@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 
-import { createSignal, onMount, onCleanup } from "solid-js";
+import { createSignal, createEffect, onMount, onCleanup } from "solid-js";
 import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui";
 import type { RGBA } from "@opentui/core";
 import { BusTui } from "@four-bytes/opencode-plugin-lib/tui";
@@ -66,7 +66,8 @@ function BrainStatusBar(props: { centered?: boolean; api: TuiPluginApi; sessionI
   };
 
   onMount(() => {
-    let bus: BusTui | null = null;
+    // bus is a signal so createEffect below can react when BusTui resolves.
+    const [bus, setBus] = createSignal<BusTui | null>(null);
     let unsub: (() => void) | null = null;
     let sessionUnsub: (() => void) | null = null;
     let timer: ReturnType<typeof setInterval> | null = null;
@@ -77,7 +78,7 @@ function BrainStatusBar(props: { centered?: boolean; api: TuiPluginApi; sessionI
       unmounted = true;
       unsub?.();
       sessionUnsub?.();
-      bus?.close();
+      bus()?.close();
       if (timer) clearInterval(timer);
     });
 
@@ -85,7 +86,7 @@ function BrainStatusBar(props: { centered?: boolean; api: TuiPluginApi; sessionI
     BusTui.connect()
       .then((b) => {
         if (unmounted) { b.close(); return; }
-        bus = b;
+        setBus(b);
         busConnected = true;
         if (timer) { clearInterval(timer); timer = null; }
         // Always subscribe to brain/status — server publishes here during ingest,
@@ -95,17 +96,25 @@ function BrainStatusBar(props: { centered?: boolean; api: TuiPluginApi; sessionI
         unsub = b.subscribe("brain/status", (envelope) => {
           handleStatus(envelope.payload as BrainStatusEvent);
         });
-        if (props.sessionId) {
-          sessionUnsub = b.subscribe(`brain/${props.sessionId}`, (envelope) => {
-            handleStatus(envelope.payload as BrainStatusEvent);
-          });
-        }
       })
       .catch((err) => {
         console.warn("[brain TUI] BusTui connect failed:", (err as Error).message);
         busConnected = false;
         if (!timer) timer = setInterval(poll, 200);
       });
+
+    // React to props.sessionId changes — sessionId is set later by the host
+    // (after first chat.message), so it is often undefined at mount time.
+    // Tracks bus() so the effect re-runs once BusTui.connect() resolves.
+    createEffect(() => {
+      const sid = props.sessionId;
+      const b = bus();
+      sessionUnsub?.();
+      if (!sid || !b) return;
+      sessionUnsub = b.subscribe(`brain/${sid}`, (envelope) => {
+        handleStatus(envelope.payload as BrainStatusEvent);
+      });
+    });
 
     // HTTP fallback for when bus is unavailable (cross-process)
     let statusUrl = "";
