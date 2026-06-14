@@ -4,6 +4,7 @@ import { createSignal, onMount, onCleanup, Show } from "solid-js";
 import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui";
 import type { RGBA } from "@opentui/core";
 import { BusTui } from "@four-bytes/opencode-plugin-lib/tui";
+import type { Unsubscribe } from "@four-bytes/opencode-plugin-lib/tui";
 import { ProgressBar } from "@four-bytes/opencode-plugin-lib/tui-components";
 import type { BrainStatusEvent } from "./event-bus";
 import { Spinner } from "./spinner";
@@ -62,12 +63,14 @@ function BrainStatusBar(props: { variant: "sidebar" | "home"; api: TuiPluginApi;
 
   onMount(() => {
     const [bus, setBus] = createSignal<BusTui | null>(null);
-    let unsub: (() => void) | null = null;
+    let unsubMain: (() => void) | null = null;
+    let unsubSession: (() => void) | null = null;
     let unmounted = false;
 
     onCleanup(() => {
       unmounted = true;
-      unsub?.();
+      unsubSession?.();
+      unsubMain?.();
       bus()?.close();
     });
 
@@ -75,14 +78,17 @@ function BrainStatusBar(props: { variant: "sidebar" | "home"; api: TuiPluginApi;
       .then((b) => {
         if (unmounted) { b.close(); return; }
         setBus(b);
-        // Scoped subscription: forService("brain") + forSession(sid) replaces
-        // the old brain/{sid} channel. No sessionId filter needed — the bus
-        // only delivers events for the scoped session (or unscoped when sid missing).
+        // Always subscribe to unscoped "status" (catches ingest before session ID is set).
+        // Also subscribe to session-scoped "status" when available (post-chat updates).
         const scoped = b.forService("brain");
-        const brainBus = props.sessionId ? scoped.forSession(props.sessionId) : scoped;
-        unsub = brainBus.subscribe("status", (envelope) => {
+        unsubMain = scoped.subscribe("status", (envelope) => {
           handleStatus(envelope.payload as BrainStatusEvent);
         });
+        if (props.sessionId) {
+          unsubSession = scoped.forSession(props.sessionId).subscribe("status", (envelope) => {
+            handleStatus(envelope.payload as BrainStatusEvent);
+          });
+        }
       })
       .catch((err) => {
         console.warn("[brain TUI] BusTui connect failed:", (err as Error).message);
