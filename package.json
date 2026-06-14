@@ -30,6 +30,9 @@
   "devDependencies": {
     "bun-types": "1.3.14"
   },
+  "bin": {
+    "brain-cli": "src/cli.ts"
+  },
   "exports": {
     "./server": {
       "types": "./dist/four-opencode-brain.d.ts",
