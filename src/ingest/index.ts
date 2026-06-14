@@ -4,7 +4,7 @@
 // 1. Resolve path
 // 2. Walk files (recursive if dir, single if file)
 // 3. Detect language from extension
-// 4. 10MB file size cap (skip oversized files, never read content → avoid OOM)
+// 4. 2MB file size cap (skip oversized files, never read content → avoid OOM)
 // 5. Content-hash check against files table → skip unchanged
 // 6. Upsert files table (FK-preserving: ON CONFLICT DO UPDATE, keeps rowid)
 // 7. Insert documents table (dedup via BEFORE INSERT trigger)
@@ -21,7 +21,7 @@ import type { Database } from "bun:sqlite";
 import { generateId, hashBuffer, hashContent, checkpointDatabase } from "../schema";
 import { log } from "../logger";
 import { ingestMutex } from "./mutex";
-import { resolveFiles, detectLanguage, isBinaryContent, type WalkResult } from "./loader";
+import { resolveFiles, isBinaryContent, type WalkResult, type WalkedFile } from "./loader";
 import { chunkContent, type Chunk } from "./chunker";
 import { extractSymbols } from "./symbolExtractor";
 import { embedChunks } from "./embed";
@@ -58,11 +58,14 @@ export interface IngestOptions {
 // Constants
 // ---------------------------------------------------------------------------
 
-/** Maximum file size for ingestion (10 MB). Files larger than this are skipped. */
-const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
+/** Maximum file size for ingestion (2 MB). Files larger than this are skipped. */
+const MAX_FILE_SIZE = 2 * 1024 * 1024; // 2 MB
 
-/** Per-file processing timeout (10 seconds). */
-const FILE_TIMEOUT_MS = 10_000; // 10 seconds per file
+/** Per-file processing timeout (30 seconds). */
+const FILE_TIMEOUT_MS = 30_000; // 30 seconds per file
+
+/** Files exceeding this duration get logged to app.log as a warning. */
+const SLOW_FILE_WARN_MS = 30_000; // 30 seconds
 
 // ---------------------------------------------------------------------------
 // Progress event helpers (gated on BRAIN_DEBUG=true)
@@ -147,10 +150,24 @@ export async function ingestPath(
       return result;
     }
 
+    // ── File-count guard: warn at 500, hard-abort at 5000 ──────────────
+    const FILE_COUNT_WARN = 500;
+    const FILE_COUNT_ABORT = 5000;
+    if (walkedFiles.length > FILE_COUNT_ABORT) {
+      result.errors.push(`Aborted: ${walkedFiles.length} files found — exceeds hard limit of ${FILE_COUNT_ABORT}. Use a more specific path.`);
+      result.durationMs = Date.now() - startTime;
+      return result;
+    }
+    if (walkedFiles.length > FILE_COUNT_WARN) {
+      log("warn", "ingest", `Large ingest: ${walkedFiles.length} files — may take a while`);
+    }
+
     // Yield so event loop can handle HTTP requests + tool calls before ingest starts
     await new Promise(r => setTimeout(r, 0));
 
-    async function processFile(walked: WalkResult, i: number): Promise<void> {
+    const abortFlags = new Map<number, boolean>();
+
+    async function processFile(walked: WalkedFile, i: number, aborted: Map<number, boolean>): Promise<void> {
         const filePath = walked.path;
         const language = walked.language;
         const fileStart = Date.now();
@@ -161,7 +178,7 @@ export async function ingestPath(
           file: filePath,
         });
 
-        // ── 4. 10MB file size cap (before reading content) ───────────────
+        // ── 4. 2MB file size cap (before reading content) ───────────────
         let fileStats;
         try {
           fileStats = await stat(filePath);
@@ -172,7 +189,7 @@ export async function ingestPath(
 
         if (fileStats.size > MAX_FILE_SIZE) {
           result.errors.push(
-            `Skipped ${filePath}: file size ${fileStats.size} exceeds 10MB cap`,
+            `Skipped ${filePath}: file size ${fileStats.size} exceeds 2MB cap`,
           );
           return;
         }
@@ -247,6 +264,10 @@ export async function ingestPath(
         const docId = generateId();
         const fileName = filePath.split("/").pop() ?? filePath;
         const filetype = filePath.split(".").pop() ?? "unknown";
+
+        // Snapshot result counters so we can revert this file's increments on abort
+        const docCountBefore = result.documentsCreated;
+        const chunkCountBefore = result.chunksCreated;
 
         try {
           db.run(
@@ -375,6 +396,15 @@ export async function ingestPath(
           }
         }
 
+        // ── Abort guard: if timeout fired, ROLLBACK (don't commit) and skip counters ──
+        if (aborted.get(i)) {
+          db.exec(`ROLLBACK TO SAVEPOINT ${spFile}`);
+          db.exec(`RELEASE SAVEPOINT ${spFile}`);
+          result.chunksCreated -= result.chunksCreated - chunkCountBefore;
+          result.documentsCreated -= result.documentsCreated - docCountBefore;
+          return;
+        }
+
         // ── RELEASE per-file SAVEPOINT ─────────────────────────────
         db.exec(`RELEASE SAVEPOINT ${spFile}`);
 
@@ -386,20 +416,27 @@ export async function ingestPath(
         if (process.env.BRAIN_DEBUG === "true") {
           log("debug", "ingest", `processed ${result.filesProcessed}/${walkedFiles.length}: ${filePath} (${Date.now() - fileStart}ms)`);
         }
+
+        // Slow-file warning: log to app.log for diagnostics
+        const elapsed = Date.now() - fileStart;
+        if (elapsed > SLOW_FILE_WARN_MS) {
+          log("warn", `ingest.slow_file.${filePath}`, `${filePath} took ${elapsed}ms`, { path: filePath, durationMs: elapsed, size });
+        }
     }
 
     for (const [i, walked] of walkedFiles.entries()) {
         try {
             await Promise.race([
-                processFile(walked, i),
+                processFile(walked, i, abortFlags),
                 new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), FILE_TIMEOUT_MS))
             ]);
         } catch (err) {
             if (err instanceof Error && err.message === 'timeout') {
+                abortFlags.set(i, true);
                 emitProgressEvent("ingest.file_timeout", { file: walked.path });
-                result.errors.push(`Timeout processing ${walked.path}: exceeded ${FILE_TIMEOUT_MS}ms`);
-                result.filesProcessed++;
-                continue;
+                log("warn", "ingest.timeout", `Timeout processing ${walked.path}: exceeded ${FILE_TIMEOUT_MS}ms`, { path: walked.path, timeoutMs: FILE_TIMEOUT_MS });
+                result.errors.push(`Timeout after ${FILE_TIMEOUT_MS}ms: ${walked.path}`);
+                continue; // Don't increment filesProcessed — processFile handles it if it completes
             }
             throw err;
         }

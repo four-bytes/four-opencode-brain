@@ -698,16 +698,16 @@ describe("ingestPath — edge cases (E5.3)", () => {
     expect(result.errors.length).toBe(0);
   });
 
-  test("skips file over 10MB cap", async () => {
-    // Create a file just over 10MB
-    const largeContent = "x".repeat(11 * 1024 * 1024); // ~11MB
+  test("skips file over 2MB cap", async () => {
+    // Create a file ~3MB (over the 2MB cap)
+    const largeContent = "x".repeat(3 * 1024 * 1024); // ~3MB
     writeFileSync(join(EDGE_DIR, "large.ts"), largeContent, "utf-8");
 
     const result = await ingestPath(db, EDGE_DIR);
     expect(result.filesFound).toBe(1);
     expect(result.filesIndexed).toBe(0);
     expect(result.errors.length).toBeGreaterThanOrEqual(1);
-    expect(result.errors[0]).toContain("exceeds 10MB cap");
+    expect(result.errors[0]).toContain("exceeds 2MB cap");
   });
 
   test("concurrent ingests don't corrupt database", async () => {
