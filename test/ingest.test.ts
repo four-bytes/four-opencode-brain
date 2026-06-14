@@ -699,7 +699,7 @@ describe("ingestPath — edge cases (E5.3)", () => {
   });
 
   test("skips file over 2MB cap", async () => {
-    // Create a file just over 2MB
+    // Create a file ~3MB (over the 2MB cap)
     const largeContent = "x".repeat(3 * 1024 * 1024); // ~3MB
     writeFileSync(join(EDGE_DIR, "large.ts"), largeContent, "utf-8");
 
