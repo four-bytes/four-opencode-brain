@@ -419,6 +419,7 @@ export async function ingestPath(
             if (err instanceof Error && err.message === 'timeout') {
                 emitProgressEvent("ingest.file_timeout", { file: walked.path });
                 log("warn", "ingest.timeout", `Timeout processing ${walked.path}: exceeded ${FILE_TIMEOUT_MS}ms`, { path: walked.path, timeoutMs: FILE_TIMEOUT_MS });
+                result.errors.push(`Timeout after ${FILE_TIMEOUT_MS}ms: ${walked.path}`);
                 result.filesProcessed++;
                 continue;
             }
