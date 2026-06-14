@@ -1,10 +1,9 @@
 /** @jsxImportSource @opentui/solid */
 
-import { createSignal, createEffect, onMount, onCleanup, Show } from "solid-js";
+import { createSignal, Show } from "solid-js";
 import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui";
 import type { RGBA } from "@opentui/core";
-import { BusTui } from "@four-bytes/opencode-plugin-lib/tui";
-import type { Unsubscribe } from "@four-bytes/opencode-plugin-lib/tui";
+import { useServiceBus } from "@four-bytes/opencode-plugin-lib/tui";
 import { ProgressBar } from "@four-bytes/opencode-plugin-lib/tui-components";
 import type { BrainStatusEvent } from "./event-bus";
 import { Spinner } from "./spinner";
@@ -59,44 +58,12 @@ function BrainStatusBar(props: { variant: "sidebar" | "home"; api: TuiPluginApi;
       setFg(theme().error);
       setHasError(true);
     }
-  };
 
-  // Single bus connection per component instance — established once on mount.
-  const [busTui, setBusTui] = createSignal<BusTui | null>(null);
+};
 
-  onMount(() => {
-    let disposed = false;
-    onCleanup(() => {
-      disposed = true;
-      busTui()?.close();
-      setBusTui(null);
-    });
-
-    BusTui.connect()
-      .then((b) => {
-        if (disposed) { b.close(); return; }
-        setBusTui(b);
-      })
-      .catch((err) => {
-        console.warn("[brain TUI] BusTui connect failed:", (err as Error).message);
-      });
-  });
-
-  // Reactive subscription — re-runs whenever bus connects OR sessionId changes.
-  // onCleanup inside createEffect fires before each re-run and on component unmount,
-  // so stale subscriptions are always torn down before the new one is created.
-  createEffect(() => {
-    const b = busTui();
-    const sessionId = props.sessionId;
-    // Do NOT subscribe without a session ID — server only publishes per-session,
-    // and an unscoped subscription would leak status across sessions.
-    if (!b || !sessionId) return;
-
-    const unsub: Unsubscribe = b.forService("brain").forSession(sessionId).subscribe("status", (envelope) => {
-      handleStatus(envelope.payload as BrainStatusEvent);
-    });
-
-    onCleanup(unsub);
+  // Reactive bus subscription — re-subscribes on session change, cleans up on unmount.
+  useServiceBus("brain", () => props.sessionId, "status", (payload) => {
+    handleStatus(payload as BrainStatusEvent);
   });
 
   const indicatorColor = () => connecting() ? theme().error : (hasError() ? theme().error : fg());
