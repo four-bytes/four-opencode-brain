@@ -53,6 +53,7 @@ function getBus(): Promise<BusClient> {
   if (!_busPromise) {
     _busPromise = BusClient.connect().catch((err) => {
       console.warn("[brain] BusClient connect failed:", (err as Error).message);
+      _busPromise = null;  // allow retry on next call
       throw err;
     });
   }
