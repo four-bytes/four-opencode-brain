@@ -158,7 +158,7 @@ function BrainStatusBar(props: { centered?: boolean; api: TuiPluginApi; sessionI
         <text> </text>
       )}
       {busy() && current() > 0 && total() > 0 && (
-        <ProgressBar current={current()} total={total()} showLabel={true} fillBg="#aaa" fillFg="#000" />
+        <ProgressBar current={current()} total={total()} showLabel={true} fillBg="#aaa" fillFg="#000" width="auto" />
       )}
     </box>
   );
@@ -187,7 +187,7 @@ function BrainStatusBar(props: { centered?: boolean; api: TuiPluginApi; sessionI
               <text> </text>
             )}
             {busy() && current() > 0 && total() > 0 && (
-              <ProgressBar current={current()} total={total()} showLabel={true} fillBg="#aaa" fillFg="#000" />
+              <ProgressBar current={current()} total={total()} showLabel={true} fillBg="#aaa" fillFg="#000" width="auto" />
             )}
           </box>
         </box>
