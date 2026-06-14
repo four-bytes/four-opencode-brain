@@ -21,7 +21,7 @@ import type { Database } from "bun:sqlite";
 import { generateId, hashBuffer, hashContent, checkpointDatabase } from "../schema";
 import { log } from "../logger";
 import { ingestMutex } from "./mutex";
-import { resolveFiles, detectLanguage, isBinaryContent, type WalkResult } from "./loader";
+import { resolveFiles, detectLanguage, isBinaryContent, type WalkResult, type WalkedFile } from "./loader";
 import { chunkContent, type Chunk } from "./chunker";
 import { extractSymbols } from "./symbolExtractor";
 import { embedChunks } from "./embed";
@@ -61,7 +61,7 @@ export interface IngestOptions {
 /** Maximum file size for ingestion (2 MB). Files larger than this are skipped. */
 const MAX_FILE_SIZE = 2 * 1024 * 1024; // 2 MB
 
-/** Per-file processing timeout (10 seconds). */
+/** Per-file processing timeout (30 seconds). */
 const FILE_TIMEOUT_MS = 30_000; // 30 seconds per file
 
 /** Files exceeding this duration get logged to app.log as a warning. */
@@ -165,7 +165,7 @@ export async function ingestPath(
     // Yield so event loop can handle HTTP requests + tool calls before ingest starts
     await new Promise(r => setTimeout(r, 0));
 
-    async function processFile(walked: WalkResult, i: number): Promise<void> {
+    async function processFile(walked: WalkedFile, i: number): Promise<void> {
         const filePath = walked.path;
         const language = walked.language;
         const fileStart = Date.now();
@@ -420,8 +420,7 @@ export async function ingestPath(
                 emitProgressEvent("ingest.file_timeout", { file: walked.path });
                 log("warn", "ingest.timeout", `Timeout processing ${walked.path}: exceeded ${FILE_TIMEOUT_MS}ms`, { path: walked.path, timeoutMs: FILE_TIMEOUT_MS });
                 result.errors.push(`Timeout after ${FILE_TIMEOUT_MS}ms: ${walked.path}`);
-                result.filesProcessed++;
-                continue;
+                continue; // Don't increment filesProcessed — processFile handles it if it completes
             }
             throw err;
         }
