@@ -88,7 +88,7 @@ export function startStatusServer(directory: string): void {
   // Write port to session-scoped discovery file (session id when known, else directory)
   try {
     const scope = _sessionId || directory;
-    const hash = createHash("md5").update(scope).digest("hex").slice(0, 12);
+    const hash = createHash("sha256").update(scope).digest("hex").slice(0, 12);
     const portFile = join(homedir(), ".cache", "opencode", "brain", `status-port-${hash}.json`);
     const dir = portFile.replace(/\/[^/]+$/, "");
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
