@@ -165,7 +165,9 @@ export async function ingestPath(
     // Yield so event loop can handle HTTP requests + tool calls before ingest starts
     await new Promise(r => setTimeout(r, 0));
 
-    async function processFile(walked: WalkedFile, i: number): Promise<void> {
+    const abortFlags = new Map<number, boolean>();
+
+    async function processFile(walked: WalkedFile, i: number, aborted: Map<number, boolean>): Promise<void> {
         const filePath = walked.path;
         const language = walked.language;
         const fileStart = Date.now();
@@ -390,6 +392,13 @@ export async function ingestPath(
           }
         }
 
+        // ── Abort guard: if timeout fired, ROLLBACK (don't commit) and skip counters ──
+        if (aborted.get(i)) {
+          db.exec(`ROLLBACK TO SAVEPOINT ${spFile}`);
+          db.exec(`RELEASE SAVEPOINT ${spFile}`);
+          return;
+        }
+
         // ── RELEASE per-file SAVEPOINT ─────────────────────────────
         db.exec(`RELEASE SAVEPOINT ${spFile}`);
 
@@ -412,11 +421,12 @@ export async function ingestPath(
     for (const [i, walked] of walkedFiles.entries()) {
         try {
             await Promise.race([
-                processFile(walked, i),
+                processFile(walked, i, abortFlags),
                 new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), FILE_TIMEOUT_MS))
             ]);
         } catch (err) {
             if (err instanceof Error && err.message === 'timeout') {
+                abortFlags.set(i, true);
                 emitProgressEvent("ingest.file_timeout", { file: walked.path });
                 log("warn", "ingest.timeout", `Timeout processing ${walked.path}: exceeded ${FILE_TIMEOUT_MS}ms`, { path: walked.path, timeoutMs: FILE_TIMEOUT_MS });
                 result.errors.push(`Timeout after ${FILE_TIMEOUT_MS}ms: ${walked.path}`);
