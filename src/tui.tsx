@@ -68,6 +68,7 @@ function BrainStatusBar(props: { centered?: boolean; api: TuiPluginApi; sessionI
   onMount(() => {
     let bus: BusTui | null = null;
     let unsub: (() => void) | null = null;
+    let sessionUnsub: (() => void) | null = null;
     let timer: ReturnType<typeof setInterval> | null = null;
     let unmounted = false;
     let busConnected = false;
@@ -75,6 +76,7 @@ function BrainStatusBar(props: { centered?: boolean; api: TuiPluginApi; sessionI
     onCleanup(() => {
       unmounted = true;
       unsub?.();
+      sessionUnsub?.();
       bus?.close();
       if (timer) clearInterval(timer);
     });
@@ -86,10 +88,18 @@ function BrainStatusBar(props: { centered?: boolean; api: TuiPluginApi; sessionI
         bus = b;
         busConnected = true;
         if (timer) { clearInterval(timer); timer = null; }
-        const channel = props.sessionId ? `brain/${props.sessionId}` : "brain/status";
-        unsub = b.subscribe(channel, (envelope) => {
+        // Always subscribe to brain/status — server publishes here during ingest,
+        // before any chat message creates a session. Once sessionId is known,
+        // also subscribe to the per-session channel (server switches to it
+        // after first chat.message). Prevents missing pre-session status updates.
+        unsub = b.subscribe("brain/status", (envelope) => {
           handleStatus(envelope.payload as BrainStatusEvent);
         });
+        if (props.sessionId) {
+          sessionUnsub = b.subscribe(`brain/${props.sessionId}`, (envelope) => {
+            handleStatus(envelope.payload as BrainStatusEvent);
+          });
+        }
       })
       .catch((err) => {
         console.warn("[brain TUI] BusTui connect failed:", (err as Error).message);
