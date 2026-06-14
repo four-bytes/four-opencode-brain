@@ -65,6 +65,11 @@ export function setSessionId(id: string): void {
       writeFileSync(portFile, JSON.stringify({ port: _port }));
     } catch { /* ignore */ }
   }
+
+  // Re-publish current state so TUI receives it even when session.created never fired (continue mode)
+  void withSessionId(id, async () => {
+    write({});
+  });
 }
 
 export function initStatus(client: PluginInput["client"], directory: string): void {

@@ -718,6 +718,7 @@ const _serverPlugin = async (input: PluginInput) => {
   return {
     "experimental.chat.system.transform": async (_hookInput, output) => {
       output.system.push(brainSystemPrompt());
+      if (_hookInput?.sessionID) setSessionId(_hookInput.sessionID);
     },
     "chat.message": async (_hookInput, output) => {
       if (_hookInput?.sessionID) setSessionId(_hookInput.sessionID);
