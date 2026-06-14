@@ -115,6 +115,7 @@ const _serverPlugin = async (input: PluginInput) => {
 
       const ingestDb = initBrainDatabase();
       const timeoutMs = calculateIngestTimeout(fileCount);
+      let lastUpdate = 0;
       try {
         const result = await withTimeout(
           ingestPath(ingestDb, directory, {
@@ -122,7 +123,9 @@ const _serverPlugin = async (input: PluginInput) => {
             reIndex: false,
             project: directory,
             progressCallback: ({ current, total }) => {
-              // Update status file every tick so TUI spinner stays live
+              const now = Date.now();
+              if (now - lastUpdate < 2000) return; // throttle to 2s
+              lastUpdate = now;
               updateStatus("busy", { text: `ingesting…`, current, total });
             },
           }),
@@ -242,6 +245,7 @@ const _serverPlugin = async (input: PluginInput) => {
           // fallback: use default
         }
         const timeoutMs = calculateIngestTimeout(fileCount);
+        let lastUpdate = 0;
 
         const result = await withTimeout(
           ingestPath(db, resolvedPath, {
@@ -249,7 +253,9 @@ const _serverPlugin = async (input: PluginInput) => {
             reIndex: args.reIndex === true,
             project: toolCtx.directory,
             progressCallback: ({ current, total }) => {
-              // Update status file every tick so TUI spinner stays live
+              const now = Date.now();
+              if (now - lastUpdate < 2000) return; // throttle to 2s
+              lastUpdate = now;
               updateStatus("busy", { text: `ingesting…`, current, total });
             },
           }),
