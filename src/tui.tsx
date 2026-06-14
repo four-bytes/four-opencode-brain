@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 
-import { createSignal, onMount, onCleanup, Show } from "solid-js";
+import { createSignal, createEffect, onMount, onCleanup, Show } from "solid-js";
 import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui";
 import type { RGBA } from "@opentui/core";
 import { BusTui } from "@four-bytes/opencode-plugin-lib/tui";
@@ -61,37 +61,42 @@ function BrainStatusBar(props: { variant: "sidebar" | "home"; api: TuiPluginApi;
     }
   };
 
+  // Single bus connection per component instance — established once on mount.
+  const [busTui, setBusTui] = createSignal<BusTui | null>(null);
+
   onMount(() => {
-    const sessionId = props.sessionId;
-    if (!sessionId) {
-      // No session context — show "connecting…" honestly. Do NOT subscribe to the unscoped
-      // channel: server-side publishes are per-session, and an unscoped fallback would leak
-      // status from other sessions into this one.
-      return;
-    }
-
-    const [bus, setBus] = createSignal<BusTui | null>(null);
-    let unsub: Unsubscribe | null = null;
-    let unmounted = false;
-
+    let disposed = false;
     onCleanup(() => {
-      unmounted = true;
-      unsub?.();
-      bus()?.close();
+      disposed = true;
+      busTui()?.close();
+      setBusTui(null);
     });
 
     BusTui.connect()
       .then((b) => {
-        if (unmounted) { b.close(); return; }
-        setBus(b);
-        // Session-scoped subscription only — mirrors the server's forSession(sid) publish.
-        unsub = b.forService("brain").forSession(sessionId).subscribe("status", (envelope) => {
-          handleStatus(envelope.payload as BrainStatusEvent);
-        });
+        if (disposed) { b.close(); return; }
+        setBusTui(b);
       })
       .catch((err) => {
         console.warn("[brain TUI] BusTui connect failed:", (err as Error).message);
       });
+  });
+
+  // Reactive subscription — re-runs whenever bus connects OR sessionId changes.
+  // onCleanup inside createEffect fires before each re-run and on component unmount,
+  // so stale subscriptions are always torn down before the new one is created.
+  createEffect(() => {
+    const b = busTui();
+    const sessionId = props.sessionId;
+    // Do NOT subscribe without a session ID — server only publishes per-session,
+    // and an unscoped subscription would leak status across sessions.
+    if (!b || !sessionId) return;
+
+    const unsub: Unsubscribe = b.forService("brain").forSession(sessionId).subscribe("status", (envelope) => {
+      handleStatus(envelope.payload as BrainStatusEvent);
+    });
+
+    onCleanup(unsub);
   });
 
   const indicatorColor = () => connecting() ? theme().error : (hasError() ? theme().error : fg());
