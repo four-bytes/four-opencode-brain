@@ -13,7 +13,7 @@ import { join } from "path";
 
 function BrainStatusBar(props: { centered?: boolean; api: TuiPluginApi; sessionId?: string }) {
   const [indicator, setIndicator] = createSignal("•");
-  const [status, setStatus] = createSignal("connecting...");
+  const [status, setStatus] = createSignal("connecting…");
   const [version, setVersion] = createSignal("");
   const [current, setCurrent] = createSignal(0);
   const [total, setTotal] = createSignal(0);
@@ -39,15 +39,19 @@ function BrainStatusBar(props: { centered?: boolean; api: TuiPluginApi; sessionI
         setFg(theme().error);
       } else if (data.status === "init") {
         setBusy(true);
-        setStatus(data.statusText ?? "initializing...");
+        setStatus(data.statusText ?? "initializing…");
+        setCurrent(0);
+        setTotal(0);
         setFg(theme().warning);
       } else if (data.status === "busy") {
         setBusy(true);
         setCurrent(data.current ?? 0);
         setTotal(data.total ?? 0);
-        setStatus(data.statusText ?? "working");
+        setStatus(data.statusText ?? "working…");
         setFg(pulse % 2 === 0 ? theme().warning : theme().accent);
       } else {
+        setCurrent(0);
+        setTotal(0);
         setBusy(false);
         setIndicator("•");
         setStatus("ready");

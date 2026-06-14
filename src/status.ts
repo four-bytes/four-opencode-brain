@@ -35,7 +35,13 @@ let _busPromise: Promise<BusClient> | null = null;
 /** Initialize with client for toast support */
 export function initVersion(v: string): void {
   _version = v;
-  write({ status: "init", statusText: "initializing..." });
+  write({ status: "init", statusText: "initializing…" });
+}
+
+export function setSessionId(id: string): void {
+  if (id === _sessionId) return;
+  _sessionId = id;
+  _channel = `brain/${id}`;
 }
 
 export function setSessionId(id: string): void {
