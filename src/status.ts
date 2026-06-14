@@ -44,12 +44,6 @@ export function setSessionId(id: string): void {
   _channel = `brain/${id}`;
 }
 
-export function setSessionId(id: string): void {
-  if (id === _sessionId) return;
-  _sessionId = id;
-  _channel = `brain/${id}`;
-}
-
 export function initStatus(client: PluginInput["client"], directory: string): void {
   _client = client;
   startStatusServer(directory);
@@ -91,9 +85,10 @@ export function startStatusServer(directory: string): void {
   
   _port = _server.port;
   
-  // Write port to session-scoped discovery file
+  // Write port to session-scoped discovery file (session id when known, else directory)
   try {
-    const hash = createHash("md5").update(directory).digest("hex").slice(0, 12);
+    const scope = _sessionId || directory;
+    const hash = createHash("md5").update(scope).digest("hex").slice(0, 12);
     const portFile = join(homedir(), ".cache", "opencode", "brain", `status-port-${hash}.json`);
     const dir = portFile.replace(/\/[^/]+$/, "");
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
