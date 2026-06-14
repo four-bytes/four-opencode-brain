@@ -69,8 +69,11 @@ function BrainStatusBar(props: { centered?: boolean; api: TuiPluginApi; sessionI
     let bus: BusTui | null = null;
     let unsub: (() => void) | null = null;
     let timer: ReturnType<typeof setInterval> | null = null;
+    let unmounted = false;
+    let busConnected = false;
 
     onCleanup(() => {
+      unmounted = true;
       unsub?.();
       bus?.close();
       if (timer) clearInterval(timer);
@@ -79,14 +82,19 @@ function BrainStatusBar(props: { centered?: boolean; api: TuiPluginApi; sessionI
     // Real-time WebSocket subscription via plugin bus
     BusTui.connect()
       .then((b) => {
+        if (unmounted) { b.close(); return; }
         bus = b;
-        const channel = `brain/${props.sessionId || "unknown"}`;
+        busConnected = true;
+        if (timer) { clearInterval(timer); timer = null; }
+        const channel = props.sessionId ? `brain/${props.sessionId}` : "brain/status";
         unsub = b.subscribe(channel, (envelope) => {
           handleStatus(envelope.payload as BrainStatusEvent);
         });
       })
       .catch((err) => {
         console.warn("[brain TUI] BusTui connect failed:", (err as Error).message);
+        busConnected = false;
+        if (!timer) timer = setInterval(poll, 200);
       });
 
     // HTTP fallback for when bus is unavailable (cross-process)
@@ -127,10 +135,10 @@ function BrainStatusBar(props: { centered?: boolean; api: TuiPluginApi; sessionI
       <text fg={theme().textMuted}>🧠 {version()} </text>
       {busy() ? <Spinner fg={fg()} /> : <text fg={connecting() ? theme().error : fg()}>{indicator()}</text>}
       <text fg={connecting() ? theme().error : theme().textMuted}> {connecting() ? "connecting…" : status()}</text>
-      {current() > 0 && total() > 0 && (
+      {busy() && current() > 0 && total() > 0 && (
         <text> </text>
       )}
-      {current() > 0 && total() > 0 && (
+      {busy() && current() > 0 && total() > 0 && (
         <ProgressBar current={current()} total={total()} showLabel={true} fillBg="#aaa" fillFg="#000" />
       )}
     </box>
@@ -156,10 +164,10 @@ function BrainStatusBar(props: { centered?: boolean; api: TuiPluginApi; sessionI
           <box flexDirection="row">
             {busy() ? <Spinner fg={fg()} /> : <text fg={connecting() ? theme().error : fg()}>{indicator()}</text>}
             <text fg={connecting() ? theme().error : theme().textMuted}> {connecting() ? "connecting…" : status()}</text>
-            {current() > 0 && total() > 0 && (
+            {busy() && current() > 0 && total() > 0 && (
               <text> </text>
             )}
-            {current() > 0 && total() > 0 && (
+            {busy() && current() > 0 && total() > 0 && (
               <ProgressBar current={current()} total={total()} showLabel={true} fillBg="#aaa" fillFg="#000" />
             )}
           </box>

@@ -44,6 +44,12 @@ export function setSessionId(id: string): void {
   _channel = `brain/${id}`;
 }
 
+export function setSessionId(id: string): void {
+  if (id === _sessionId) return;
+  _sessionId = id;
+  _channel = `brain/${id}`;
+}
+
 export function initStatus(client: PluginInput["client"], directory: string): void {
   _client = client;
   startStatusServer(directory);
@@ -53,6 +59,7 @@ function getBus(): Promise<BusClient> {
   if (!_busPromise) {
     _busPromise = BusClient.connect().catch((err) => {
       console.warn("[brain] BusClient connect failed:", (err as Error).message);
+      _busPromise = null;  // allow retry on next call
       throw err;
     });
   }
