@@ -62,15 +62,21 @@ function BrainStatusBar(props: { variant: "sidebar" | "home"; api: TuiPluginApi;
   };
 
   onMount(() => {
+    const sessionId = props.sessionId;
+    if (!sessionId) {
+      // No session context — show "connecting…" honestly. Do NOT subscribe to the unscoped
+      // channel: server-side publishes are per-session, and an unscoped fallback would leak
+      // status from other sessions into this one.
+      return;
+    }
+
     const [bus, setBus] = createSignal<BusTui | null>(null);
-    let unsubMain: (() => void) | null = null;
-    let unsubSession: (() => void) | null = null;
+    let unsub: Unsubscribe | null = null;
     let unmounted = false;
 
     onCleanup(() => {
       unmounted = true;
-      unsubSession?.();
-      unsubMain?.();
+      unsub?.();
       bus()?.close();
     });
 
@@ -78,17 +84,10 @@ function BrainStatusBar(props: { variant: "sidebar" | "home"; api: TuiPluginApi;
       .then((b) => {
         if (unmounted) { b.close(); return; }
         setBus(b);
-        // Always subscribe to unscoped "status" (catches ingest before session ID is set).
-        // Also subscribe to session-scoped "status" when available (post-chat updates).
-        const scoped = b.forService("brain");
-        unsubMain = scoped.subscribe("status", (envelope) => {
+        // Session-scoped subscription only — mirrors the server's forSession(sid) publish.
+        unsub = b.forService("brain").forSession(sessionId).subscribe("status", (envelope) => {
           handleStatus(envelope.payload as BrainStatusEvent);
         });
-        if (props.sessionId) {
-          unsubSession = scoped.forSession(props.sessionId).subscribe("status", (envelope) => {
-            handleStatus(envelope.payload as BrainStatusEvent);
-          });
-        }
       })
       .catch((err) => {
         console.warn("[brain TUI] BusTui connect failed:", (err as Error).message);
@@ -146,7 +145,11 @@ const tui: TuiPlugin = (api) => {
     order: 60,
     slots: {
       sidebar_content: (_ctx: any, props: any) => <BrainStatusBar api={api} variant="sidebar" sessionId={props.session_id} />,
-      home_bottom: () => <BrainStatusBar api={api} variant="home" />,
+      home_bottom: (_ctx: any, _props: any) => {
+        const route = api.route.current;
+        const sid = route.name === "session" && route.params ? (route.params as { sessionID?: string }).sessionID : undefined;
+        return <BrainStatusBar api={api} variant="home" sessionId={sid} />;
+      },
     },
   });
   return Promise.resolve();
