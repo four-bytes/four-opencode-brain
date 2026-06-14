@@ -2,6 +2,7 @@ import { writeFileSync, mkdirSync, existsSync } from "fs";
 import { createHash } from "crypto";
 import { homedir } from "os";
 import { join } from "path";
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { PluginInput } from "@opencode-ai/plugin";
 import { BusClient } from "@four-bytes/opencode-plugin-lib";
 import type { BrainStatusEvent } from "./event-bus";
@@ -25,11 +26,24 @@ const _state = { current: {} as Record<string, unknown> };
 _state.current = { status: "init", statusText: "", version: "" };
 let _version = "";
 let _sessionId = "";
-let _channel = "brain/status";
+
+// ALS stores the session ID for the duration of each tool execute.
+// write() reads from here first, so concurrent sessions never overwrite each other's channel.
+const _sessionAls = new AsyncLocalStorage<string>();
+
+/**
+ * Run fn in an ALS context bound to sessionId.
+ * All updateStatus calls inside fn publish to brain/{sessionId}.
+ * Outside any withSessionId context (e.g. startup, auto-ingest), they publish to brain/status.
+ */
+export function withSessionId<T>(id: string, fn: () => Promise<T>): Promise<T> {
+  return _sessionAls.run(id, fn);
+}
 
 let _client: PluginInput["client"] | null = null;
 let _server: ReturnType<typeof Bun.serve> | null = null;
 let _port = 0;
+let _brainBus: BusClient | null = null;
 let _busPromise: Promise<BusClient> | null = null;
 
 /** Initialize with client for toast support */
@@ -41,7 +55,6 @@ export function initVersion(v: string): void {
 export function setSessionId(id: string): void {
   if (id === _sessionId) return;
   _sessionId = id;
-  _channel = `brain/${id}`;
 
   if (_port > 0) {
     try {
@@ -116,11 +129,18 @@ export function stopStatusServer(): void {
 
 function write(data: Record<string, unknown>): void {
   _state.current = { ..._state.current, ...data };
-  const payload = { ..._state.current, version: _version, sessionId: _sessionId || undefined } as BrainStatusEvent;
+  // ALS-stored session ID wins over global (prevents cross-session channel overwrite).
+  // If no ALS context (startup, auto-ingest fire-and-forget), use the unscoped "brain" service.
+  const sid = _sessionAls.getStore() ?? "";
+  const payload = { ..._state.current, version: _version, sessionId: sid || undefined } as BrainStatusEvent;
 
-  // Real-time push via plugin bus (HTTP fallback still serves status endpoint)
+  // Real-time push via scoped plugin bus (HTTP fallback still serves status endpoint)
   getBus()
-    .then((bus) => bus.publish(_channel, payload))
+    .then(async (bus) => {
+      const scoped = bus.forService("brain");
+      const target = sid ? scoped.forSession(sid) : scoped;
+      await target.publish("status", payload);
+    })
     .catch((err) => {
       console.warn("[brain] Bus publish failed:", (err as Error).message);
     });
