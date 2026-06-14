@@ -21,7 +21,7 @@ import type { Database } from "bun:sqlite";
 import { generateId, hashBuffer, hashContent, checkpointDatabase } from "../schema";
 import { log } from "../logger";
 import { ingestMutex } from "./mutex";
-import { resolveFiles, detectLanguage, isBinaryContent, type WalkResult, type WalkedFile } from "./loader";
+import { resolveFiles, isBinaryContent, type WalkResult, type WalkedFile } from "./loader";
 import { chunkContent, type Chunk } from "./chunker";
 import { extractSymbols } from "./symbolExtractor";
 import { embedChunks } from "./embed";
