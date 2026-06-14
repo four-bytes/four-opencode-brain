@@ -124,7 +124,7 @@ const _serverPlugin = async (input: PluginInput) => {
             project: directory,
             progressCallback: ({ current, total }) => {
               const now = Date.now();
-              if (now - lastUpdate < 2000) return; // throttle to 2s
+              if (now - lastUpdate < 2000 && current !== total) return; // throttle to 2s (but always emit final update)
               lastUpdate = now;
               updateStatus("busy", { text: `ingesting…`, current, total });
             },
@@ -254,7 +254,7 @@ const _serverPlugin = async (input: PluginInput) => {
             project: toolCtx.directory,
             progressCallback: ({ current, total }) => {
               const now = Date.now();
-              if (now - lastUpdate < 2000) return; // throttle to 2s
+              if (now - lastUpdate < 2000 && current !== total) return; // throttle to 2s (but always emit final update)
               lastUpdate = now;
               updateStatus("busy", { text: `ingesting…`, current, total });
             },
