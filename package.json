@@ -15,7 +15,7 @@
     "four-bytes"
   ],
   "dependencies": {
-    "@four-bytes/opencode-plugin-lib": "github:four-bytes/four-opencode-plugin-lib#v0.6.0",
+    "@four-bytes/opencode-plugin-lib": "github:four-bytes/four-opencode-plugin-lib#v0.6.1",
     "@opencode-ai/plugin": "1.16.2",
     "@opentui/core": "0.3.2",
     "@opentui/solid": "0.3.2",
@@ -29,6 +29,9 @@
   },
   "devDependencies": {
     "bun-types": "1.3.14"
+  },
+  "bin": {
+    "brain-cli": "src/cli.ts"
   },
   "exports": {
     "./server": {

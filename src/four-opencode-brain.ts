@@ -53,7 +53,7 @@ function calculateIngestTimeout(fileCount: number): number {
 }
 
 /** Unified status updates — see src/status.ts */
-import { updateStatus, initStatus, initVersion, setSessionId, stopStatusServer, toast } from "./status";
+import { updateStatus, initStatus, initVersion, setSessionId, stopStatusServer, toast, withSessionId } from "./status";
 
 
 
@@ -91,18 +91,25 @@ const _serverPlugin = async (input: PluginInput) => {
   try { hasGit = statSync(join(normDir, ".git")).isDirectory(); } catch {}
   const shouldSkip = !hasGit || isSystemDir;
 
-  if (autoIngest && directory && !shouldSkip) {
-    log("info", "auto-ingest", "Auto-ingest starting", { directory });
+  // Auto-ingest is deferred until session.created — we need a session ID to publish
+  // status updates on a scoped bus channel. The actual ingest is triggered from the
+  // "event" hook below. _autoIngestDone ensures it runs exactly once per plugin lifetime.
+  let _autoIngestDone = false;
 
-    // Fire-and-forget — don't block plugin readiness
-    (async () => {
+  /**
+   * Run the auto-ingest inside a withSessionId(...) context so all updateStatus calls
+   * publish on brain/{sessionId} — matching the TUI's forSession(sessionId) subscription.
+   */
+  const runAutoIngest = async (sessionID: string) => {
+    log("info", "auto-ingest", "Auto-ingest starting (deferred)", { directory, sessionID });
+    return withSessionId(sessionID, async () => {
       // Signal TUI we're scanning the directory tree
       updateStatus("busy", { text: "scanning files…", total: 0 });
 
       // Quick preliminary file count for toast + timeout calculation
       let fileCount = 0;
       try {
-        const walked = await resolveFiles(directory, true);
+        const walked = await resolveFiles(directory!, true);
         fileCount = walked.files.length;
         updateStatus("busy", { text: `scanning files… ${fileCount}`, total: fileCount });
         const timeoutS = (calculateIngestTimeout(fileCount) / 1000).toFixed(0);
@@ -118,10 +125,10 @@ const _serverPlugin = async (input: PluginInput) => {
       let lastUpdate = 0;
       try {
         const result = await withTimeout(
-          ingestPath(ingestDb, directory, {
+          ingestPath(ingestDb, directory!, {
             recursive: true,
             reIndex: false,
-            project: directory,
+            project: directory!,
             progressCallback: ({ current, total }) => {
               const now = Date.now();
               if (now - lastUpdate < 500 && current !== total) return; // throttle to 0.5s (but always emit final update)
@@ -133,7 +140,7 @@ const _serverPlugin = async (input: PluginInput) => {
           `auto-ingest ${directory}`,
         );
         if (result.filesFound === 0) {
-          const dirname = directory.split("/").filter(Boolean).pop() ?? directory;
+          const dirname = directory!.split("/").filter(Boolean).pop() ?? directory!;
           const msg = `🧠 Found 0 files in ${dirname} — check path`;
           updateStatus("warning", { text: msg.replace("🧠 ", ""), toast: msg.replace("🧠 ", "") });
           toast( msg.replace("🧠 ", ""), "warning", "Brain 🧠");
@@ -173,10 +180,10 @@ const _serverPlugin = async (input: PluginInput) => {
       } finally {
         ingestDb.close();
       }
-    })();
-  }
+    });
+  };
 
-  else if (autoIngest && shouldSkip) {
+  if (autoIngest && shouldSkip) {
     log("warn", "auto-ingest", "Skipped — not a git repo or system dir: " + normDir);
     updateStatus("warning", { text: "ingest excluded" });
   }
@@ -229,6 +236,7 @@ const _serverPlugin = async (input: PluginInput) => {
       reIndex: s.boolean().optional().describe("Force re-index even if unchanged (default: false)"),
     },
     execute: async (args, toolCtx) => {
+      return withSessionId(toolCtx.sessionID, async () => {
       const db = initBrainDatabase();
       const resolvedPath = resolve(toolCtx.directory, args.path);
       try {
@@ -288,6 +296,7 @@ const _serverPlugin = async (input: PluginInput) => {
       } finally {
         db.close();
       }
+      }); // withSessionId
     },
   });
 
@@ -301,6 +310,7 @@ const _serverPlugin = async (input: PluginInput) => {
       project: s.string().optional().describe("Project name or hash to scope search"),
     },
     execute: async (args, toolCtx) => {
+      return withSessionId(toolCtx.sessionID, async () => {
       updateStatus("busy", { text: "searching…" });
       const db = initBrainDatabase();
       try {
@@ -339,13 +349,15 @@ const _serverPlugin = async (input: PluginInput) => {
       } finally {
         db.close();
       }
+      }); // withSessionId
     },
   });
 
   const brain_reindex = tool({
     description: "Rebuild vec0 vector index from chunks.",
     args: {},
-    execute: async () => {
+    execute: async (_args, toolCtx) => {
+      return withSessionId(toolCtx.sessionID, async () => {
       updateStatus("busy", { text: "Rebuilding vector index…" });
       const db = initBrainDatabase();
       try {
@@ -384,6 +396,7 @@ const _serverPlugin = async (input: PluginInput) => {
       } finally {
         db.close();
       }
+      }); // withSessionId
     },
   });
 
@@ -407,7 +420,8 @@ const _serverPlugin = async (input: PluginInput) => {
       diaryContent: s.string().optional().describe("Diary entry content (for add)"),
       diaryDate: s.string().optional().describe("Diary date YYYY-MM-DD (defaults today)"),
     },
-    execute: async (args) => {
+    execute: async (args, toolCtx) => {
+      return withSessionId(toolCtx.sessionID, async () => {
       const db = initBrainDatabase();
       try {
         switch (args.mode) {
@@ -481,6 +495,7 @@ const _serverPlugin = async (input: PluginInput) => {
       } finally {
         db.close();
       }
+      }); // withSessionId
     },
   });
 
@@ -519,7 +534,8 @@ const _serverPlugin = async (input: PluginInput) => {
       confidence: s.number().optional(),
       review_state: s.string().optional(),
     },
-    execute: async (args) => {
+    execute: async (args, toolCtx) => {
+      return withSessionId(toolCtx.sessionID, async () => {
       const db = initBrainDatabase();
       try {
                 updateStatus("busy", { text: "Saving knowledge entry…" });
@@ -545,6 +561,7 @@ const _serverPlugin = async (input: PluginInput) => {
       } finally {
         db.close();
       }
+      }); // withSessionId
     },
   });
 
@@ -560,7 +577,8 @@ const _serverPlugin = async (input: PluginInput) => {
       commit_ref: s.string().optional(),
       observed_symptoms: s.string().optional(),
     },
-    execute: async (args) => {
+    execute: async (args, toolCtx) => {
+      return withSessionId(toolCtx.sessionID, async () => {
       const db = initBrainDatabase();
       try {
                 updateStatus("busy", { text: "Recording occurrence…" });
@@ -584,6 +602,7 @@ const _serverPlugin = async (input: PluginInput) => {
       } finally {
         db.close();
       }
+      }); // withSessionId
     },
   });
 
@@ -595,7 +614,8 @@ const _serverPlugin = async (input: PluginInput) => {
       review_state: s.string().describe("draft|reviewed|accepted|rejected|superseded"),
       confidence: s.number().optional(),
     },
-    execute: async (args) => {
+    execute: async (args, toolCtx) => {
+      return withSessionId(toolCtx.sessionID, async () => {
       const db = initBrainDatabase();
       try {
                 updateStatus("busy", { text: "Updating review…" });
@@ -615,6 +635,7 @@ const _serverPlugin = async (input: PluginInput) => {
       } finally {
         db.close();
       }
+      }); // withSessionId
     },
   });
 
@@ -629,7 +650,8 @@ const _serverPlugin = async (input: PluginInput) => {
       limit: s.number().optional().describe("Max results (default 20)"),
       offset: s.number().optional().describe("Result offset"),
     },
-    execute: async (args) => {
+    execute: async (args, toolCtx) => {
+      return withSessionId(toolCtx.sessionID, async () => {
       const db = initBrainDatabase();
       try {
         const results = kbSearch(db, {
@@ -650,6 +672,7 @@ const _serverPlugin = async (input: PluginInput) => {
       } finally {
         db.close();
       }
+      }); // withSessionId
     },
   });
 
@@ -695,6 +718,7 @@ const _serverPlugin = async (input: PluginInput) => {
   return {
     "experimental.chat.system.transform": async (_hookInput, output) => {
       output.system.push(brainSystemPrompt());
+      if (_hookInput?.sessionID) setSessionId(_hookInput.sessionID);
     },
     "chat.message": async (_hookInput, output) => {
       if (_hookInput?.sessionID) setSessionId(_hookInput.sessionID);
@@ -713,6 +737,23 @@ const _serverPlugin = async (input: PluginInput) => {
       }
     },
     "event": async (eventInput) => {
+      // Capture session ID as soon as a session exists — this enables forSession(sid)
+      // publishes from updateStatus(). Also triggers deferred auto-ingest exactly once,
+      // wrapped in withSessionId(sid) so its status updates land on the right channel.
+      if (eventInput.event.type === "session.created") {
+        const { sessionID } = eventInput.event.properties as { sessionID?: string };
+        if (sessionID) {
+          setSessionId(sessionID);
+          if (!_autoIngestDone && autoIngest && directory && !shouldSkip) {
+            _autoIngestDone = true;
+            // Fire-and-forget — don't block the event hook
+            runAutoIngest(sessionID).catch((err) => {
+              log("error", "auto-ingest", `Deferred auto-ingest failed: ${String(err)}`);
+            });
+          }
+        }
+        return;
+      }
       if (eventInput.event.type === "session.idle") {
         const { sessionID } = eventInput.event.properties;
         let text = "";

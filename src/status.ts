@@ -65,6 +65,11 @@ export function setSessionId(id: string): void {
       writeFileSync(portFile, JSON.stringify({ port: _port }));
     } catch { /* ignore */ }
   }
+
+  // Re-publish current state so TUI receives it even when session.created never fired (continue mode)
+  void withSessionId(id, async () => {
+    write({});
+  });
 }
 
 export function initStatus(client: PluginInput["client"], directory: string): void {
@@ -130,15 +135,18 @@ export function stopStatusServer(): void {
 function write(data: Record<string, unknown>): void {
   _state.current = { ..._state.current, ...data };
   // ALS-stored session ID wins over global (prevents cross-session channel overwrite).
-  // If no ALS context (startup, auto-ingest fire-and-forget), use the unscoped "brain" service.
+  // If no session ID is available, skip the bus publish entirely — the TUI only
+  // subscribes on forSession(sid), so there is no unscoped consumer to receive on.
+  // The HTTP /status endpoint still serves polling clients.
   const sid = _sessionAls.getStore() ?? "";
   const payload = { ..._state.current, version: _version, sessionId: sid || undefined } as BrainStatusEvent;
+
+  if (!sid) return;
 
   // Real-time push via scoped plugin bus (HTTP fallback still serves status endpoint)
   getBus()
     .then(async (bus) => {
-      const scoped = bus.forService("brain");
-      const target = sid ? scoped.forSession(sid) : scoped;
+      const target = bus.forService("brain").forSession(sid);
       await target.publish("status", payload);
     })
     .catch((err) => {
