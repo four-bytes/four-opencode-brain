@@ -265,6 +265,10 @@ export async function ingestPath(
         const fileName = filePath.split("/").pop() ?? filePath;
         const filetype = filePath.split(".").pop() ?? "unknown";
 
+        // Snapshot result counters so we can revert this file's increments on abort
+        const docCountBefore = result.documentsCreated;
+        const chunkCountBefore = result.chunksCreated;
+
         try {
           db.run(
             `INSERT OR IGNORE INTO documents (id, title, content, content_hash, type, path, language, filetype, project_hash)
@@ -396,6 +400,8 @@ export async function ingestPath(
         if (aborted.get(i)) {
           db.exec(`ROLLBACK TO SAVEPOINT ${spFile}`);
           db.exec(`RELEASE SAVEPOINT ${spFile}`);
+          result.chunksCreated -= result.chunksCreated - chunkCountBefore;
+          result.documentsCreated -= result.documentsCreated - docCountBefore;
           return;
         }
 
