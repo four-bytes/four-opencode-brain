@@ -55,6 +55,17 @@ function calculateIngestTimeout(fileCount: number): number {
 /** Unified status updates — see src/status.ts */
 import { updateStatus, initStatus, initVersion, setSessionId, stopStatusServer, toast } from "./status";
 
+/** Returns a throttled progress callback that always emits the final update. */
+function makeProgressCallback(): ({ current, total }: { current: number; total: number }) => void {
+  let lastUpdate = 0;
+  return ({ current, total }) => {
+    const now = Date.now();
+    if (now - lastUpdate < 2000 && current !== total) return; // throttle to 2s (but always emit final update)
+    lastUpdate = now;
+    updateStatus("busy", { text: `ingesting…`, current, total });
+  };
+}
+
 
 
 const _serverPlugin = async (input: PluginInput) => {
@@ -115,19 +126,13 @@ const _serverPlugin = async (input: PluginInput) => {
 
       const ingestDb = initBrainDatabase();
       const timeoutMs = calculateIngestTimeout(fileCount);
-      let lastUpdate = 0;
       try {
         const result = await withTimeout(
           ingestPath(ingestDb, directory, {
             recursive: true,
             reIndex: false,
             project: directory,
-            progressCallback: ({ current, total }) => {
-              const now = Date.now();
-              if (now - lastUpdate < 2000 && current !== total) return; // throttle to 2s (but always emit final update)
-              lastUpdate = now;
-              updateStatus("busy", { text: `ingesting…`, current, total });
-            },
+            progressCallback: makeProgressCallback(),
           }),
           timeoutMs,
           `auto-ingest ${directory}`,
@@ -245,23 +250,17 @@ const _serverPlugin = async (input: PluginInput) => {
           // fallback: use default
         }
         const timeoutMs = calculateIngestTimeout(fileCount);
-        let lastUpdate = 0;
 
         const result = await withTimeout(
           ingestPath(db, resolvedPath, {
             recursive: args.recursive !== false,
             reIndex: args.reIndex === true,
             project: toolCtx.directory,
-            progressCallback: ({ current, total }) => {
-              const now = Date.now();
-              if (now - lastUpdate < 2000 && current !== total) return; // throttle to 2s (but always emit final update)
-              lastUpdate = now;
-              updateStatus("busy", { text: `ingesting…`, current, total });
-            },
+            progressCallback: makeProgressCallback(),
           }),
           timeoutMs,
           `ingestPath(${resolvedPath})`,
-        );
+
         const msg = `🧠 Indexed ${result.filesIndexed} new, ${result.filesSkipped} skipped in ${(result.durationMs / 1000).toFixed(1)}s`;
         toolCtx.metadata({
           title: msg,
