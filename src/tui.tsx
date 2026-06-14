@@ -87,7 +87,10 @@ function BrainStatusBar(props: { centered?: boolean; api: TuiPluginApi; sessionI
         // also subscribe to the per-session channel (server switches to it
         // after first chat.message). Prevents missing pre-session status updates.
         unsub = b.subscribe("brain/status", (envelope) => {
-          handleStatus(envelope.payload as BrainStatusEvent);
+          const data = envelope.payload as BrainStatusEvent & { sessionId?: string };
+          // Only process if no session ID OR matches current session
+          if (data.sessionId && props.sessionId && data.sessionId !== props.sessionId) return;
+          handleStatus(data);
         });
       })
       .catch((err) => {
@@ -103,7 +106,9 @@ function BrainStatusBar(props: { centered?: boolean; api: TuiPluginApi; sessionI
       sessionUnsub?.();
       if (!sid || !b) return;
       sessionUnsub = b.subscribe(`brain/${sid}`, (envelope) => {
-        handleStatus(envelope.payload as BrainStatusEvent);
+          const data = envelope.payload as BrainStatusEvent & { sessionId?: string };
+          if (data.sessionId && data.sessionId !== sid) return;
+          handleStatus(data);
       });
     });
   });
