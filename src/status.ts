@@ -116,7 +116,7 @@ export function stopStatusServer(): void {
 
 function write(data: Record<string, unknown>): void {
   _state.current = { ..._state.current, ...data };
-  const payload = { ..._state.current, version: _version } as BrainStatusEvent;
+  const payload = { ..._state.current, version: _version, sessionId: _sessionId || undefined } as BrainStatusEvent;
 
   // Real-time push via plugin bus (HTTP fallback still serves status endpoint)
   getBus()
