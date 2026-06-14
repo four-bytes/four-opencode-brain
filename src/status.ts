@@ -143,6 +143,7 @@ function write(data: Record<string, unknown>): void {
     })
     .catch((err) => {
       console.warn("[brain] Bus publish failed:", (err as Error).message);
+      _busPromise = null; // reset to allow reconnect
     });
 }
 
