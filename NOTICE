@@ -1,0 +1,56 @@
+four-opencode-brain
+Copyright 2026 four-bytes
+
+This product includes software developed by third parties.
+
+---
+
+sqlite-vec (https://github.com/asg017/sqlite-vec)
+Copyright (c) 2024 Alex Garcia
+Licensed under the Apache License, Version 2.0
+https://www.apache.org/licenses/LICENSE-2.0
+
+---
+
+web-tree-sitter (https://github.com/tree-sitter/tree-sitter)
+Copyright (c) 2018 Max Brunsfeld
+Licensed under the MIT License
+
+tree-sitter-typescript (https://github.com/tree-sitter/tree-sitter-typescript)
+Copyright (c) 2017 Max Brunsfeld
+Licensed under the MIT License
+
+tree-sitter-javascript (https://github.com/tree-sitter/tree-sitter-javascript)
+Copyright (c) 2014 Max Brunsfeld
+Licensed under the MIT License
+
+tree-sitter-php (https://github.com/tree-sitter/tree-sitter-php)
+Copyright (c) 2017 Josh Vera, GitHub
+Copyright (c) 2019 Max Brunsfeld, Amaan Qureshi, Christian Frøystad, Caleb White
+Licensed under the MIT License
+
+tree-sitter-rust (https://github.com/tree-sitter/tree-sitter-rust)
+Copyright (c) 2017 Maxim Sokolov
+Licensed under the MIT License
+
+---
+
+The MIT License
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
