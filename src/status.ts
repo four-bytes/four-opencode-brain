@@ -80,7 +80,7 @@ export function initStatus(client: PluginInput["client"], directory: string): vo
 function getBus(): Promise<BusClient> {
   if (!_busPromise) {
     _busPromise = BusClient.connect().catch((err) => {
-      console.warn("[brain] BusClient connect failed:", (err as Error).message);
+      _client?.app?.log({ body: { service: "brain", level: "warn", message: "BusClient connect failed", extra: { error: String(err) } } }).catch(() => {});
       _busPromise = null;  // allow retry on next call
       throw err;
     });
@@ -150,7 +150,7 @@ function write(data: Record<string, unknown>): void {
       await target.publish("status", payload);
     })
     .catch((err) => {
-      console.warn("[brain] Bus publish failed:", (err as Error).message);
+      _client?.app?.log({ body: { service: "brain", level: "warn", message: "Bus publish failed", extra: { error: String(err) } } }).catch(() => {});
       _busPromise = null; // reset to allow reconnect
     });
 }
