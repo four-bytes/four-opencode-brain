@@ -79,9 +79,20 @@ export function initStatus(client: PluginInput["client"], directory: string): vo
 
 function getBus(): Promise<BusClient> {
   if (!_busPromise) {
-    _busPromise = BusClient.connect().catch((err) => {
-      _client?.app?.log({ body: { service: "brain", level: "warn", message: "BusClient connect failed", extra: { error: String(err) } } }).catch(() => {});
-      _busPromise = null;  // allow retry on next call
+    _busPromise = BusClient.connect({
+      onWarn: (message, ...args) => {
+        _client?.app?.log({ body: { service: "brain", level: "warn", message, extra: { args: args.map(String) } } }).catch(() => {});
+      },
+    }).then((bus) => {
+      // bus.activePort === 0 means MemoryBusClient fallback (Go bus binary not available)
+      if ((bus as any).activePort === 0) {
+        _client?.tui?.showToast({ body: { title: "Brain 🧠", message: "Bus unavailable — using in-memory fallback. Install four-local-bus for cross-process communication.", variant: "warning", duration: 8000 } });
+      }
+      return bus;
+    }).catch((err) => {
+      _client?.app?.log({ body: { service: "brain", level: "error", message: "BusClient connect failed", extra: { error: String(err) } } }).catch(() => {});
+      _client?.tui?.showToast({ body: { title: "Brain 🧠", message: "Bus connection failed: " + String(err).slice(0, 80), variant: "error", duration: 7000 } });
+      _busPromise = null;
       throw err;
     });
   }
