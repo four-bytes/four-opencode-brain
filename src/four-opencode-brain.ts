@@ -221,10 +221,9 @@ const _serverPlugin = async (input: PluginInput) => {
     firstRunDb.close();
   }
 
-  // Init complete — only set idle if NOT auto-ingesting
-  if (!autoIngest) {
-    updateStatus("ready"); // init complete, no auto-ingest
-  }
+  // Init complete — plugin is ready for tool calls. Auto-ingest (if any) runs in background
+  // and will transition to "busy" → "ready" on its own.
+  updateStatus("ready");
 
   // ---- Tool definitions ----
 
