@@ -4,8 +4,22 @@ import { homedir } from "os";
 import { join } from "path";
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { PluginInput } from "@opencode-ai/plugin";
-import { BusClient, deriveProjectId } from "@four-bytes/opencode-plugin-lib";
+import { BusClient } from "@four-bytes/opencode-plugin-lib";
 import type { BrainStatusEvent } from "./event-bus";
+
+/**
+ * Derives a stable project ID from a directory path.
+ * Uses FNV-1a 32-bit hash — works in both Bun (server) and TUI (browser).
+ * Inlined from @four-bytes/opencode-plugin-lib to avoid npm publish dependency.
+ */
+function deriveProjectId(directory: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < directory.length; i++) {
+    h ^= directory.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(16).padStart(8, "0");
+}
 
 export type StatusState = "busy" | "success" | "warning" | "error" | "ready";
 
