@@ -7,6 +7,20 @@ import type { PluginInput } from "@opencode-ai/plugin";
 import { BusClient } from "@four-bytes/opencode-plugin-lib";
 import type { BrainStatusEvent } from "./event-bus";
 
+/**
+ * Derives a stable project ID from a directory path.
+ * Uses FNV-1a 32-bit hash — works in both Bun (server) and TUI (browser).
+ * Inlined from @four-bytes/opencode-plugin-lib to avoid npm publish dependency.
+ */
+function deriveProjectId(directory: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < directory.length; i++) {
+    h ^= directory.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(16).padStart(8, "0");
+}
+
 export type StatusState = "busy" | "success" | "warning" | "error" | "ready";
 
 export interface StatusOpts {
@@ -40,6 +54,7 @@ export function withSessionId<T>(id: string, fn: () => Promise<T>): Promise<T> {
   return _sessionAls.run(id, fn);
 }
 
+let _directory = "";
 let _client: PluginInput["client"] | null = null;
 let _server: ReturnType<typeof Bun.serve> | null = null;
 let _port = 0;
@@ -74,6 +89,7 @@ export function setSessionId(id: string): void {
 
 export function initStatus(client: PluginInput["client"], directory: string): void {
   _client = client;
+  _directory = directory;
   startStatusServer(directory);
 }
 
@@ -134,19 +150,17 @@ export function stopStatusServer(): void {
 
 function write(data: Record<string, unknown>): void {
   _state.current = { ..._state.current, ...data };
-  // ALS-stored session ID wins over global (prevents cross-session channel overwrite).
-  // If no session ID is available, skip the bus publish entirely — the TUI only
-  // subscribes on forSession(sid), so there is no unscoped consumer to receive on.
-  // The HTTP /status endpoint still serves polling clients.
-  const sid = _sessionAls.getStore() ?? "";
-  const payload = { ..._state.current, version: _version, sessionId: sid || undefined } as BrainStatusEvent;
+  // Publish to project-scoped bus channel — brain status is project-wide, not session-scoped.
+  // The TUI subscribes on forProject(projectId), so sessions share the same status feed.
+  const projectId = _directory ? deriveProjectId(_directory) : "";
+  const payload = { ..._state.current, version: _version } as BrainStatusEvent;
 
-  if (!sid) return;
+  if (!projectId) return;
 
-  // Real-time push via scoped plugin bus (HTTP fallback still serves status endpoint)
+  // Real-time push via project-scoped plugin bus (HTTP /status endpoint still serves polling clients)
   getBus()
     .then(async (bus) => {
-      const target = bus.forService("brain").forSession(sid);
+      const target = bus.forService("brain").forProject(projectId);
       await target.publish("status", payload);
     })
     .catch((err) => {

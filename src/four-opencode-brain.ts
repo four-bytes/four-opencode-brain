@@ -91,102 +91,91 @@ const _serverPlugin = async (input: PluginInput) => {
   try { hasGit = statSync(join(normDir, ".git")).isDirectory(); } catch {}
   const shouldSkip = !hasGit || isSystemDir;
 
-  // Auto-ingest is deferred until session.created — we need a session ID to publish
-  // status updates on a scoped bus channel. The actual ingest is triggered from the
-  // "event" hook below. _autoIngestDone ensures it runs exactly once per plugin lifetime.
+  // Auto-ingest runs immediately at plugin init (not deferred to session.created).
+  // _autoIngestDone ensures it runs exactly once per plugin lifetime.
   let _autoIngestDone = false;
 
-  /**
-   * Run the auto-ingest inside a withSessionId(...) context so all updateStatus calls
-   * publish on brain/{sessionId} — matching the TUI's forSession(sessionId) subscription.
-   */
-  const runAutoIngest = async (sessionID: string) => {
-    log("info", "auto-ingest", "Auto-ingest starting (deferred)", { directory, sessionID });
-    return withSessionId(sessionID, async () => {
-      // Signal TUI we're scanning the directory tree
-      updateStatus("busy", { text: "scanning files…", total: 0 });
+  const runAutoIngest = async () => {
+    log("info", "auto-ingest", "Auto-ingest starting", { directory });
+    // Signal TUI we're scanning the directory tree
+    updateStatus("busy", { text: "scanning files…", total: 0 });
 
-      // Quick preliminary file count for toast + timeout calculation
-      let fileCount = 0;
-      try {
-        const walked = await resolveFiles(directory!, true);
-        fileCount = walked.files.length;
-        updateStatus("busy", { text: `scanning files… ${fileCount}`, total: fileCount });
-        const timeoutS = (calculateIngestTimeout(fileCount) / 1000).toFixed(0);
-        toast( `Indexing ${fileCount} files… (timeout: ${timeoutS}s)`, "info", "Brain 🧠");
-        updateStatus("busy", { text: `ingesting…`, current: 0, total: fileCount });
-      } catch {
-        toast( `Indexing ${project?.name ?? "project"}…`, "info", "Brain 🧠");
-        updateStatus("busy", { text: "ingesting…" });
-      }
+    // Quick preliminary file count for toast + timeout calculation
+    let fileCount = 0;
+    try {
+      const walked = await resolveFiles(directory!, true);
+      fileCount = walked.files.length;
+      updateStatus("busy", { text: `scanning files… ${fileCount}`, total: fileCount });
+      const timeoutS = (calculateIngestTimeout(fileCount) / 1000).toFixed(0);
+      toast(`Indexing ${fileCount} files… (timeout: ${timeoutS}s)`, "info", "Brain 🧠");
+      updateStatus("busy", { text: `ingesting…`, current: 0, total: fileCount });
+    } catch {
+      toast(`Indexing ${project?.name ?? "project"}…`, "info", "Brain 🧠");
+      updateStatus("busy", { text: "ingesting…" });
+    }
 
-      const ingestDb = initBrainDatabase();
-      const timeoutMs = calculateIngestTimeout(fileCount);
-      let lastUpdate = 0;
-      try {
-        const result = await withTimeout(
-          ingestPath(ingestDb, directory!, {
-            recursive: true,
-            reIndex: false,
-            project: directory!,
-            progressCallback: ({ current, total }) => {
-              const now = Date.now();
-              if (now - lastUpdate < 500 && current !== total) return; // throttle to 0.5s (but always emit final update)
-              lastUpdate = now;
-              updateStatus("busy", { text: `ingesting…`, current, total });
-            },
-          }),
-          timeoutMs,
-          `auto-ingest ${directory}`,
-        );
-        if (result.filesFound === 0) {
-          const dirname = directory!.split("/").filter(Boolean).pop() ?? directory!;
-          const msg = `🧠 Found 0 files in ${dirname} — check path`;
-          updateStatus("warning", { text: msg.replace("🧠 ", ""), toast: msg.replace("🧠 ", "") });
-          toast( msg.replace("🧠 ", ""), "warning", "Brain 🧠");
-          log("warn", "auto-ingest", msg, {
-            filesFound: result.filesFound,
-            filesSkipped: result.filesSkipped,
-            filesIndexed: result.filesIndexed,
-            errors: result.errors.length,
-            durationMs: result.durationMs,
-            directory,
-          });
-        } else {
-          const msg = `🧠 Indexed ${result.filesIndexed} new, ${result.filesSkipped} skipped in ${(result.durationMs / 1000).toFixed(1)}s`;
-          updateStatus("success", { text: msg.replace("🧠 ", ""), toast: msg.replace("🧠 ", "") });
-          toast( msg.replace("🧠 ", ""), "success", "Brain 🧠");
-          log("info", "auto-ingest", msg, {
-            filesFound: result.filesFound,
-            filesIndexed: result.filesIndexed,
-            filesSkipped: result.filesSkipped,
-            errors: result.errors.length,
-            durationMs: result.durationMs,
-            directory,
-          });
-        }
-      } catch (err) {
-        if (err instanceof TimeoutError) {
-          const msg = `🧠 Auto-ingest timed out after ${(timeoutMs / 1000).toFixed(0)}s — partial results`;
-          updateStatus("warning", { text: msg.replace("🧠 ", ""), toast: msg.replace("🧠 ", "") });
-          toast( msg.replace("🧠 ", ""), "warning", "Brain 🧠");
-          log("warn", "auto-ingest", msg, { directory, timeoutMs });
-        } else {
-          const errMsg = `🧠 Auto-ingest failed: ${String(err)}`;
-          updateStatus("error", { text: errMsg.replace("🧠 ", ""), toast: errMsg.replace("🧠 ", "") });
-          toast( errMsg.replace("🧠 ", ""), "error", "Brain 🧠");
-          log("error", "auto-ingest", errMsg);
-        }
-      } finally {
-        ingestDb.close();
+    const ingestDb = initBrainDatabase();
+    const timeoutMs = calculateIngestTimeout(fileCount);
+    let lastUpdate = 0;
+    try {
+      const result = await withTimeout(
+        ingestPath(ingestDb, directory!, {
+          recursive: true,
+          reIndex: false,
+          project: directory!,
+          progressCallback: ({ current, total }) => {
+            const now = Date.now();
+            if (now - lastUpdate < 500 && current !== total) return;
+            lastUpdate = now;
+            updateStatus("busy", { text: `ingesting…`, current, total });
+          },
+        }),
+        timeoutMs,
+        `auto-ingest ${directory}`,
+      );
+      if (result.filesFound === 0) {
+        const dirname = directory!.split("/").filter(Boolean).pop() ?? directory!;
+        const msg = `🧠 Found 0 files in ${dirname} — check path`;
+        updateStatus("warning", { text: msg.replace("🧠 ", ""), toast: msg.replace("🧠 ", "") });
+        toast(msg.replace("🧠 ", ""), "warning", "Brain 🧠");
+        log("warn", "auto-ingest", msg, { filesFound: result.filesFound, filesSkipped: result.filesSkipped, filesIndexed: result.filesIndexed, errors: result.errors.length, durationMs: result.durationMs, directory });
+      } else {
+        const msg = `🧠 Indexed ${result.filesIndexed} new, ${result.filesSkipped} skipped in ${(result.durationMs / 1000).toFixed(1)}s`;
+        updateStatus("success", { text: msg.replace("🧠 ", ""), toast: msg.replace("🧠 ", "") });
+        toast(msg.replace("🧠 ", ""), "success", "Brain 🧠");
+        log("info", "auto-ingest", msg, { filesFound: result.filesFound, filesIndexed: result.filesIndexed, filesSkipped: result.filesSkipped, errors: result.errors.length, durationMs: result.durationMs, directory });
       }
-    });
+    } catch (err) {
+      if (err instanceof TimeoutError) {
+        const msg = `🧠 Auto-ingest timed out after ${(timeoutMs / 1000).toFixed(0)}s — partial results`;
+        updateStatus("warning", { text: msg.replace("🧠 ", ""), toast: msg.replace("🧠 ", "") });
+        toast(msg.replace("🧠 ", ""), "warning", "Brain 🧠");
+        log("warn", "auto-ingest", msg, { directory, timeoutMs });
+      } else {
+        const errMsg = `🧠 Auto-ingest failed: ${String(err)}`;
+        updateStatus("error", { text: errMsg.replace("🧠 ", ""), toast: errMsg.replace("🧠 ", "") });
+        toast(errMsg.replace("🧠 ", ""), "error", "Brain 🧠");
+        log("error", "auto-ingest", errMsg);
+      }
+    } finally {
+      ingestDb.close();
+    }
   };
 
   if (autoIngest && shouldSkip) {
     log("warn", "auto-ingest", "Skipped — not a git repo or system dir: " + normDir);
     updateStatus("warning", { text: "ingest excluded" });
   }
+
+  // Trigger auto-ingest immediately (fire-and-forget, not deferred to session.created).
+  // updateStatus("ready") is NOT called here — auto-ingest transitions to ready/success/error on its own.
+  if (autoIngest && !shouldSkip && !_autoIngestDone) {
+    _autoIngestDone = true;
+    runAutoIngest().catch((err) => {
+      log("error", "auto-ingest", `Auto-ingest failed: ${String(err)}`);
+    });
+  }
+
   // Install slash commands on first run (silent unless error)
   try {
     installBrainCommands();
@@ -221,9 +210,11 @@ const _serverPlugin = async (input: PluginInput) => {
     firstRunDb.close();
   }
 
-  // Init complete — plugin is ready for tool calls. Auto-ingest (if any) runs in background
-  // and will transition to "busy" → "ready" on its own.
-  updateStatus("ready");
+  // Init complete — set ready ONLY if auto-ingest is not running.
+  // Auto-ingest transitions to ready/success/error on its own via updateStatus().
+  if (!_autoIngestDone) {
+    updateStatus("ready");
+  }
 
   // ---- Tool definitions ----
 
@@ -736,20 +727,11 @@ const _serverPlugin = async (input: PluginInput) => {
       }
     },
     "event": async (eventInput) => {
-      // Capture session ID as soon as a session exists — this enables forSession(sid)
-      // publishes from updateStatus(). Also triggers deferred auto-ingest exactly once,
-      // wrapped in withSessionId(sid) so its status updates land on the right channel.
+      // Capture session ID as soon as a session exists.
       if (eventInput.event.type === "session.created") {
         const { sessionID } = eventInput.event.properties as { sessionID?: string };
         if (sessionID) {
           setSessionId(sessionID);
-          if (!_autoIngestDone && autoIngest && directory && !shouldSkip) {
-            _autoIngestDone = true;
-            // Fire-and-forget — don't block the event hook
-            runAutoIngest(sessionID).catch((err) => {
-              log("error", "auto-ingest", `Deferred auto-ingest failed: ${String(err)}`);
-            });
-          }
         }
         return;
       }

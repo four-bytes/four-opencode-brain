@@ -8,6 +8,20 @@ import { ProgressBar } from "@four-bytes/opencode-plugin-lib/tui-components";
 import type { BrainStatusEvent } from "./event-bus";
 import { Spinner } from "./spinner";
 
+/**
+ * Derives a stable project ID from a directory path.
+ * Uses FNV-1a 32-bit hash — works in both Bun (server) and TUI (browser).
+ * Inlined from @four-bytes/opencode-plugin-lib to avoid npm publish dependency.
+ */
+function deriveProjectId(directory: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < directory.length; i++) {
+    h ^= directory.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(16).padStart(8, "0");
+}
+
 function BrainStatusBar(props: { variant: "sidebar" | "home"; api: TuiPluginApi; sessionId?: string }) {
   const [statusText, setStatusText] = createSignal("connecting…");
   const [version, setVersion] = createSignal("");
@@ -61,8 +75,8 @@ function BrainStatusBar(props: { variant: "sidebar" | "home"; api: TuiPluginApi;
 
 };
 
-  // Reactive bus subscription — re-subscribes on session change, cleans up on unmount.
-  useServiceBus("brain", () => props.sessionId, "status", (payload) => {
+  // Reactive bus subscription — project-scoped (brain status is project-wide, not session-scoped).
+  useServiceBus("brain", () => deriveProjectId(props.api.state.path.directory), "status", (payload) => {
     handleStatus(payload as BrainStatusEvent);
   });
 
