@@ -173,6 +173,7 @@ const _serverPlugin = async (input: PluginInput) => {
     _autoIngestDone = true;
     runAutoIngest().catch((err) => {
       log("error", "auto-ingest", `Auto-ingest failed: ${String(err)}`);
+      updateStatus("error", { text: "auto-ingest failed" });
     });
   }
 
