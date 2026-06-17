@@ -5,7 +5,7 @@
     "": {
       "name": "@four-bytes/four-opencode-brain",
       "dependencies": {
-        "@four-bytes/opencode-plugin-lib": "github:four-bytes/four-opencode-plugin-lib#v0.6.1",
+        "@four-bytes/opencode-plugin-lib": "github:four-bytes/four-opencode-plugin-lib#v0.6.6",
         "@opencode-ai/plugin": "1.16.2",
         "@opentui/core": "0.3.2",
         "@opentui/solid": "0.3.2",
@@ -81,7 +81,7 @@
 
     "@babel/types": ["@babel/types@7.29.7", "", { "dependencies": { "@babel/helper-string-parser": "^7.29.7", "@babel/helper-validator-identifier": "^7.29.7" } }, "sha512-4zBIxpPzowiZpusoFkyGVwakdRJUyuH5PxQ/PrqghfdFWWasvnCdPfQXHrenDai+gyLARulZjZowCOj6fjT4pA=="],
 
-    "@four-bytes/opencode-plugin-lib": ["@four-bytes/opencode-plugin-lib@github:four-bytes/four-opencode-plugin-lib#6fcf394", { "peerDependencies": { "@opencode-ai/plugin": ">=1.16.0", "@opentui/solid": "^0.4.1", "solid-js": "^1.9.13" } }, "four-bytes-four-opencode-plugin-lib-6fcf394", "sha512-KiGhgfknOS6HfrXbQV95Z7IhMeBvN3pwRPqmXj6+XP5Rfl0cCZyLseA2AVLZ+mqI0Z2NtNvEEoFyR9HenogHTg=="],
+    "@four-bytes/opencode-plugin-lib": ["@four-bytes/opencode-plugin-lib@github:four-bytes/four-opencode-plugin-lib#335bf0e", { "peerDependencies": { "@opencode-ai/plugin": ">=1.16.0", "@opentui/solid": "^0.4.1", "solid-js": "^1.9.13" } }, "four-bytes-four-opencode-plugin-lib-335bf0e", "sha512-I5oCnqL4D14TC2wSSeiGkAz6hHzeTUe6+jeBXeqPx+qv/3VaRiMGjFTFxweF0tl2vCVT3TbJWnr0ZKdIEmy6Pw=="],
 
     "@huggingface/jinja": ["@huggingface/jinja@0.5.9", "", {}, "sha512-uWTG+l3VJRsl7EXxYizuL3P+cCPoc3cRqbWWRcQN0FhejRfbdq0RNhCmbY/YDtnTcz9icdLYuLDjsnz4d8JMuw=="],
 
@@ -257,7 +257,7 @@
 
     "effect": ["effect@4.0.0-beta.74", "", { "dependencies": { "@standard-schema/spec": "^1.1.0", "fast-check": "^4.8.0", "find-my-way-ts": "^0.1.6", "ini": "^7.0.0", "kubernetes-types": "^1.30.0", "msgpackr": "^2.0.1", "multipasta": "^0.2.7", "toml": "^4.1.1", "uuid": "^14.0.0", "yaml": "^2.9.0" } }, "sha512-Yx+Kh12U+i2FmjwEfKs+ePFmpMd43RPD1oGqc/VraSS9bYzvF0Ff3PojwEFEVEewp8xc92Uxu28gTspU4qyvHA=="],
 
-    "electron-to-chromium": ["electron-to-chromium@1.5.372", "", {}, "sha512-M3yhbAlilnwqC8D21t28UCDGHyitShTmmLRU/H+b74P6Ski16Nb9HONYEaVpMj/pwC7BEo5B95FpjODLCWbtfA=="],
+    "electron-to-chromium": ["electron-to-chromium@1.5.375", "", {}, "sha512-ZWP5eB4BVPW/ZYo9252hQZHZ5XavtsTgpbhcmMmRwymavC5AsLWQWBPaKMeNd2LW0KGby5HPXvj7+sr4ta5j/Q=="],
 
     "emoji-regex": ["emoji-regex@10.6.0", "", {}, "sha512-toUI84YS5YmxW219erniWD0CIVOo46xGKColeNQRgOzDorgBi1v4D71/OFzgD9GO2UGKIv1C3Sp8DAn0+j5w7A=="],
 
