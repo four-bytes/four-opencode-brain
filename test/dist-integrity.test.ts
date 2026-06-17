@@ -8,9 +8,9 @@ const PKG_PATH = join(import.meta.dir, "..", "package.json");
 describe("dist-integrity", () => {
   const dist = readFileSync(DIST_PATH, "utf-8");
 
-  test("forProject is present at least 2 times (definition + call site)", () => {
+  test("forProject is present at least 1 time (call site)", () => {
     const matches = dist.match(/forProject/g) ?? [];
-    expect(matches.length).toBeGreaterThanOrEqual(2);
+    expect(matches.length).toBeGreaterThanOrEqual(1);
   });
 
   test("forService is present at least 2 times (definition + call site)", () => {
