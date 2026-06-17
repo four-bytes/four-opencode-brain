@@ -95,7 +95,27 @@ export function initStatus(client: PluginInput["client"], directory: string): vo
 
 function getBus(): Promise<BusClient> {
   if (!_busPromise) {
-    _busPromise = BusClient.connect().catch((err) => {
+    _busPromise = BusClient.connect({
+      onWarn: (msg, ...args) => {
+        const details = args
+          .map((a) => {
+            try {
+              return typeof a === "object" && a !== null ? JSON.stringify(a) : String(a);
+            } catch {
+              return "[unserializable]";
+            }
+          })
+          .join(" ");
+        _client?.app?.log({
+          body: {
+            service: "brain",
+            level: "warn",
+            message: msg,
+            extra: { details },
+          },
+        }).catch(() => {});
+      },
+    }).catch((err) => {
       _client?.app?.log({ body: { service: "brain", level: "warn", message: "BusClient connect failed", extra: { error: String(err) } } }).catch(() => {});
       _busPromise = null;  // allow retry on next call
       throw err;
