@@ -44,3 +44,24 @@ For local dev guidance, see `AGENTS.local.md` (gitignored, machine-specific).
 
 ## Workflow
 Issues → Branch → PR → Merge (feature workflow)
+
+
+## Plugin-Lib Dependency Strategy
+
+`@four-bytes/opencode-plugin-lib` is a shared library used by multiple plugins (brain, tbg, etc.).
+
+**CI:** `package.json` pins to a GitHub tag:
+```json
+"@four-bytes/opencode-plugin-lib": "github:four-bytes/four-opencode-plugin-lib#v0.6.6"
+```
+When plugin-lib changes are merged:
+1. Bump version in plugin-lib's `package.json`
+2. Tag: `git tag v0.6.7 && git push --tags`
+3. Update all dependent plugins' `package.json` + `bun.lock` to new tag
+
+**Local dev:** Uses `bun link` to point `node_modules/@four-bytes/opencode-plugin-lib` at the local source `~/four-opencode-plugin-lib`:
+```bash
+cd ~/four-opencode-plugin-lib && bun link
+cd ~/four-opencode-brain && bun link @four-bytes/opencode-plugin-lib
+```
+This makes local changes immediately available without re-tagging. NEVER commit a lockfile with symlink paths — always regenerate with `bun install` before pushing.

@@ -3,7 +3,6 @@ import { readFileSync } from "fs";
 import { join } from "path";
 
 const DIST_PATH = join(import.meta.dir, "..", "dist", "four-opencode-brain.js");
-const PKG_PATH = join(import.meta.dir, "..", "package.json");
 
 describe("dist-integrity", () => {
   const dist = readFileSync(DIST_PATH, "utf-8");
