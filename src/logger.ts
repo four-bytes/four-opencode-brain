@@ -12,6 +12,7 @@ interface ThrottleState {
 const throttles = new Map<string, ThrottleState>();
 let silent = false;
 let _logClient: any = null;
+let _startupLogged = false;
 
 export function setLogClient(client: any): void {
   _logClient = client;
@@ -51,7 +52,7 @@ export function log(
   const payload = data ? ` ${JSON.stringify(data)}` : "";
   const line = `${prefix} ${msg}${payload}`;
 
-  // App.log output (plugin mode) — additional structured channel
+  // App.log output (plugin mode) — primary structured channel
   if (_logClient) {
     const appLevel = level === "warn" ? "warn" : level === "error" ? "error" : level === "debug" ? "debug" : "info";
     _logClient.app?.log({
@@ -59,9 +60,18 @@ export function log(
     }).catch(() => {});
     // Debug messages go ONLY to app.log — skip console
     if (level === "debug") return;
+    // In plugin mode, console output is ONLY valid for the initial startup "init" message.
+    // All other logging goes through app.log() to avoid breaking the terminal UI.
+    if (_startupLogged) return;
+    if (key === "init") {
+      _startupLogged = true;
+      // Fall through to console output for the startup message only
+    } else {
+      return;
+    }
   }
 
-  // Console output — preserved for user visibility (info/warn/error)
+  // Console output — startup message (plugin mode), or all messages (CLI / standalone mode)
   if (level === "error") console.error(line);
   else if (level === "warn") console.warn(line);
   else if (!silent) console.log(line);
