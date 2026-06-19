@@ -8,6 +8,7 @@ For local dev guidance, see `AGENTS.local.md` (gitignored, machine-specific).
 - License: Apache-2.0
 - ESM, Bun-targeted, strict TypeScript
 - **Token budget enforced: every tool description measured, no redundant alias tools**
+- **Console logging:** Plugins MUST use `_client?.app?.log()` for all logging in plugin mode — `console.log` / `console.warn` / `console.error` is ONLY permitted for the initial startup `"init"` message. Console output in plugin mode breaks the terminal UI.
 
 ## Architecture
 "One brain, three internal engines." Modular internally:
