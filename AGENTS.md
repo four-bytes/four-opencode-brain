@@ -65,3 +65,9 @@ cd ~/four-opencode-plugin-lib && bun link
 cd ~/four-opencode-brain && bun link @four-bytes/opencode-plugin-lib
 ```
 This makes local changes immediately available without re-tagging. NEVER commit a lockfile with symlink paths — always regenerate with `bun install` before pushing.
+
+## Bus Architecture
+- **Port:** Fixed port 4099 (no port discovery, no port.json)
+- **Binary:** `~/.local/bin/four-local-bus` (Go, statically linked)
+- **Fallback:** `MemoryBus`/`MemoryBusTui` for same-process only
+- **Cross-process:** Requires Go `four-local-bus` binary running
