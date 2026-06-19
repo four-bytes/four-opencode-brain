@@ -97,24 +97,15 @@ function getBus(): Promise<BusClient> {
   if (!_busPromise) {
     _busPromise = BusClient.connect({
       onWarn: (msg, ...args) => {
-        const details = args
-          .map((a) => {
-            try {
-              return typeof a === "object" && a !== null ? JSON.stringify(a) : String(a);
-            } catch {
-              return "[unserializable]";
-            }
-          })
-          .join(" ");
         _client?.app?.log({
           body: {
             service: "brain",
             level: "warn",
             message: msg,
-            extra: { details },
-          },
+            extra: { details: args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(" ") }
+          }
         }).catch(() => {});
-      },
+      }
     }).catch((err) => {
       _client?.app?.log({ body: { service: "brain", level: "warn", message: "BusClient connect failed", extra: { error: String(err) } } }).catch(() => {});
       _busPromise = null;  // allow retry on next call
