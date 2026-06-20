@@ -7,6 +7,10 @@ import { useServiceBus } from "@four-bytes/opencode-plugin-lib/tui";
 import { ProgressBar } from "@four-bytes/opencode-plugin-lib/tui-components";
 import type { BrainStatusEvent } from "./event-bus";
 import { Spinner } from "./spinner";
+import { readFileSync, existsSync } from "fs";
+import { join } from "path";
+import { homedir } from "os";
+import { createHash } from "crypto";
 
 /**
  * Derives a stable project ID from a directory path.
@@ -73,12 +77,34 @@ function BrainStatusBar(props: { variant: "sidebar" | "home"; api: TuiPluginApi;
       setHasError(true);
     }
 
-};
+  };
+
+  // Discover the server's HTTP status port from the cache file
+  const discoverPollEndpoint = (): string | undefined => {
+    try {
+      const scopes = [props.sessionId, props.api.state.path.directory].filter(Boolean) as string[];
+      for (const scope of scopes) {
+        const hash = createHash("sha256").update(scope).digest("hex").slice(0, 12);
+        const portFile = join(homedir(), ".cache", "opencode", "brain", `status-port-${hash}.json`);
+        if (existsSync(portFile)) {
+          const data = JSON.parse(readFileSync(portFile, "utf-8"));
+          if (data.port) return `http://127.0.0.1:${data.port}`;
+        }
+      }
+    } catch { /* port file not found or not ready yet */ }
+    return undefined;
+  };
+
+  const pollEndpoint = discoverPollEndpoint();
 
   // Reactive bus subscription — project-scoped (brain status is project-wide, not session-scoped).
-  useServiceBus("brain", () => deriveProjectId(props.api.state.path.directory), "status", (payload) => {
-    handleStatus(payload as BrainStatusEvent);
-  });
+  useServiceBus(
+    "brain",
+    () => deriveProjectId(props.api.state.path.directory),
+    "status",
+    (payload) => { handleStatus(payload as BrainStatusEvent); },
+    pollEndpoint ? { pollEndpoint } : undefined,
+  );
 
   const indicatorColor = () => connecting() ? theme().error : (hasError() ? theme().error : fg());
   const textColor = () => connecting() ? theme().error : theme().textMuted;
