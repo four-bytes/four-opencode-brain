@@ -22,7 +22,7 @@ import { generateId, hashBuffer, hashContent, checkpointDatabase } from "../sche
 import { log } from "../logger";
 import { ingestMutex } from "./mutex";
 import { resolveFiles, isBinaryContent, type WalkResult, type WalkedFile } from "./loader";
-import { chunkContent, type Chunk } from "./chunker";
+import { chunkContent, type ChunkResult, type Chunk } from "./chunker";
 import { extractSymbols } from "./symbolExtractor";
 import { embedChunks } from "./embed";
 import { loadVec0 } from "../embed/extensionLoader";
@@ -40,6 +40,7 @@ export interface IngestResult {
   chunksCreated: number;
   chunksEmbedded: number; // chunks successfully embedded into vec0
   documentsCreated: number;
+  binarySkipped: number; // files/chunks skipped due to binary content detection
   errors: string[];
   durationMs: number;
 }
@@ -105,6 +106,7 @@ export async function ingestPath(
       chunksCreated: 0,
       chunksEmbedded: 0,
       documentsCreated: 0,
+      binarySkipped: 0,
       errors: [],
       durationMs: 0,
     };
@@ -207,6 +209,7 @@ export async function ingestPath(
         // Binary content guard: skip files with null bytes (safety net for misnamed binaries)
         if (isBinaryContent(new Uint8Array(buf))) {
           log("debug", "ingest", `Skipped binary content: ${filePath}`);
+          result.binarySkipped++;
           return;
         }
 
@@ -296,8 +299,9 @@ export async function ingestPath(
         const totalLines = content.split("\n").length;
 
         let chunks: Chunk[];
+        let chunkResult: ChunkResult;
         try {
-          chunks = await chunkContent({
+          chunkResult = await chunkContent({
             documentId: docId,
             fileId,
             content,
@@ -305,6 +309,8 @@ export async function ingestPath(
             language,
             totalLines,
           });
+          chunks = chunkResult.chunks;
+          result.binarySkipped += chunkResult.binarySkipped;
         } catch (err) {
           db.exec(`ROLLBACK TO SAVEPOINT ${spFile}`);
           result.errors.push(`Failed to chunk ${filePath}: ${String(err)}`);

@@ -174,7 +174,8 @@ export function isBinaryExtension(filePath: string): boolean {
   return BINARY_EXTENSIONS.has(ext);
 }
 
-const BINARY_SCAN_BYTES = 256;
+const FULL_SCAN_SIZE = 64 * 1024; // 64 KB — files ≤ this get fully scanned
+const SAMPLE_SIZE = 4 * 1024;      // 4 KB per sample region
 const BINARY_RATIO_THRESHOLD = 0.3;
 
 function isPrintable(b: number): boolean {
@@ -184,15 +185,52 @@ function isPrintable(b: number): boolean {
   return false;
 }
 
-/** Returns true if the buffer appears binary (null bytes or >30% non-printable chars). */
-export function isBinaryContent(buf: Uint8Array): boolean {
-  const limit = Math.min(BINARY_SCAN_BYTES, buf.length);
+/** Check a specific byte range for binary content. */
+function isBinaryRegion(buf: Uint8Array, start: number, end: number): boolean {
   let nonPrintable = 0;
-  for (let i = 0; i < limit; i++) {
+  const len = end - start;
+  for (let i = start; i < end; i++) {
     if (buf[i] === 0) return true; // null byte → binary
     if (!isPrintable(buf[i])) nonPrintable++;
   }
-  return nonPrintable / limit > BINARY_RATIO_THRESHOLD;
+  return len > 0 && nonPrintable / len > BINARY_RATIO_THRESHOLD;
+}
+
+/**
+ * Returns true if the buffer appears binary (null bytes or >30% non-printable chars).
+ *
+ * Strategy:
+ * - Files ≤ 64KB: scans the **entire file content**
+ * - Files  > 64KB: samples up to 3 regions — first 4KB, middle 4KB, last 4KB
+ * - Null byte in any region → immediate binary
+ */
+export function isBinaryContent(buf: Uint8Array): boolean {
+  if (buf.length === 0) return false; // empty file is not binary
+
+  if (buf.length <= FULL_SCAN_SIZE) {
+    // Small file: scan entire content
+    return isBinaryRegion(buf, 0, buf.length);
+  }
+
+  // Large file: sample 3 regions
+  const half = Math.floor(buf.length / 2);
+  const halfSample = Math.floor(SAMPLE_SIZE / 2);
+
+  const regions = [
+    { start: 0, end: SAMPLE_SIZE },                                       // first 4KB
+    { start: half - halfSample, end: half + Math.ceil(SAMPLE_SIZE / 2) }, // middle 4KB
+    { start: buf.length - SAMPLE_SIZE, end: buf.length },                 // last 4KB
+  ];
+
+  for (const region of regions) {
+    const clampedStart = Math.max(0, Math.min(region.start, buf.length - 1));
+    const clampedEnd = Math.max(clampedStart, Math.min(region.end, buf.length));
+    if (isBinaryRegion(buf, clampedStart, clampedEnd)) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 // ---------------------------------------------------------------------------
