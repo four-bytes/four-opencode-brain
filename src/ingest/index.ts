@@ -75,6 +75,9 @@ const FILE_TIMEOUT_MS = 30_000; // 30 seconds per file
 /** Files exceeding this duration get logged to app.log as a warning. */
 const SLOW_FILE_WARN_MS = 10_000; // 10 seconds
 
+/** Delay before showing current file name in progress (3 seconds). */
+const SLOW_FILE_DISPLAY_MS = 3_000;
+
 // ---------------------------------------------------------------------------
 // Progress event helpers (gated on BRAIN_DEBUG=true)
 // ---------------------------------------------------------------------------
@@ -203,13 +206,11 @@ export async function ingestPath(
           return;
         }
 
-        // Report which file is being processed
-        options?.progressCallback?.({
-          current: i + 1,
-          total: walkedFiles.length,
-          currentFile: filePath,
-          currentFileSize: fileStats.size,
-        });
+        // Only show filename in progress if the file takes longer than 3s
+        let slowFileTimer: ReturnType<typeof setTimeout> | undefined;
+        slowFileTimer = setTimeout(() => {
+            options?.progressCallback?.({ current: i + 1, total: walkedFiles.length, currentFile: filePath, currentFileSize: fileStats.size });
+        }, SLOW_FILE_DISPLAY_MS) as unknown as ReturnType<typeof setTimeout>;
 
         // Read file as raw buffer — binary-safe hashing (avoids encoding issues)
         let buf: ArrayBuffer;
@@ -437,11 +438,8 @@ export async function ingestPath(
 
         result.filesIndexed++;
         result.filesProcessed++;
-        options?.progressCallback?.({
-          current: result.filesProcessed,
-          total: walkedFiles.length,
-          currentFile: undefined,
-        });
+        if (slowFileTimer) clearTimeout(slowFileTimer);
+        options?.progressCallback?.({ current: result.filesProcessed, total: walkedFiles.length });
 
         // Per-file timing debug (BRAIN_DEBUG only)
         if (process.env.BRAIN_DEBUG === "true") {
