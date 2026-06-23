@@ -13,6 +13,7 @@
 import { hashContent } from "../schema";
 import { sessionCache } from "../cache";
 import { extractSymbols, type ExtractedSymbol } from "./symbolExtractor";
+import { log } from "../logger";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -59,6 +60,29 @@ export interface Chunk {
   endLine: number | null;
   chunkType: "document" | "symbol" | "window" | "heading";
   tokenCount: number;
+}
+
+export interface ChunkResult {
+  chunks: Chunk[];
+  binarySkipped: number;
+}
+
+// ---------------------------------------------------------------------------
+// Per-chunk binary validation (safety net)
+// ---------------------------------------------------------------------------
+
+/**
+ * Check if a chunk's text content appears binary.
+ * Encodes text to bytes and checks for null bytes or >30% non-printable chars.
+ */
+function isBinaryChunk(text: string): boolean {
+  const bytes = new TextEncoder().encode(text);
+  let nonPrintable = 0;
+  for (let i = 0; i < bytes.length; i++) {
+    if (bytes[i] === 0) return true;
+    if (bytes[i] < 0x20 && bytes[i] !== 0x09 && bytes[i] !== 0x0a && bytes[i] !== 0x0d) nonPrintable++;
+  }
+  return bytes.length > 0 && nonPrintable / bytes.length > 0.3;
 }
 
 // ---------------------------------------------------------------------------
@@ -375,57 +399,83 @@ async function fallbackChunk(
  * - **Small files (≤1024 tokens)**: single document chunk
  * - **Large files without symbols**: 512-token sliding windows, 77-token overlap
  */
-export async function chunkContent(input: ChunkInput): Promise<Chunk[]> {
-  if (!input.content || input.content.length === 0) return [];
+export async function chunkContent(input: ChunkInput): Promise<ChunkResult> {
+  if (!input.content || input.content.length === 0) return { chunks: [], binarySkipped: 0 };
 
   const { content, documentId, fileId, filePath, language, totalLines } = input;
   const totalTokenCount = estimateTokens(content);
 
+  let chunks: Chunk[];
+
   // Markdown: heading-based chunking
   if (language === "markdown" || language === "text") {
     const headingChunks = chunkByHeadings(content, documentId, fileId);
-    if (headingChunks.length > 1) return headingChunks;
-    // Single heading = whole doc, fall through to document/window logic
+    if (headingChunks.length > 1) {
+      chunks = headingChunks;
+    } else {
+      // Single heading = whole doc, fall through to document/window logic
+      chunks = [];
+    }
+  } else {
+    chunks = [];
   }
 
-  // Small files: single document chunk
-  if (totalTokenCount <= MAX_TOKENS_PER_CHUNK) {
-    const h = hashContentCached(content);
-    return [
-      {
-        id: crypto.randomUUID(),
-        documentId,
-        fileId,
-        chunkIndex: 0,
-        content,
-        contentHash: h,
-        symbol: null,
-        kind: null,
-        startLine: 1,
-        endLine: totalLines,
-        chunkType: "document",
-        tokenCount: totalTokenCount,
-      },
-    ];
-  }
-
-  // Code files: try symbol extraction
-  if (
-    language === "typescript" ||
-    language === "javascript" ||
-    language === "php" ||
-    language === "rust"
-  ) {
-    try {
-      const symbols = await extractSymbols(content, filePath);
-      if (symbols.length > 0) {
-        return await chunkBySymbols(content, symbols, documentId, fileId, totalTokenCount);
+  if (chunks.length === 0) {
+    // Small files: single document chunk
+    if (totalTokenCount <= MAX_TOKENS_PER_CHUNK) {
+      const h = hashContentCached(content);
+      chunks = [
+        {
+          id: crypto.randomUUID(),
+          documentId,
+          fileId,
+          chunkIndex: 0,
+          content,
+          contentHash: h,
+          symbol: null,
+          kind: null,
+          startLine: 1,
+          endLine: totalLines,
+          chunkType: "document",
+          tokenCount: totalTokenCount,
+        },
+      ];
+    } else {
+      // Code files: try symbol extraction
+      if (
+        language === "typescript" ||
+        language === "javascript" ||
+        language === "php" ||
+        language === "rust"
+      ) {
+        try {
+          const symbols = await extractSymbols(content, filePath);
+          if (symbols.length > 0) {
+            chunks = await chunkBySymbols(content, symbols, documentId, fileId, totalTokenCount);
+          } else {
+            chunks = await fallbackChunk(content, documentId, fileId, totalTokenCount);
+          }
+        } catch {
+          chunks = await fallbackChunk(content, documentId, fileId, totalTokenCount);
+        }
+      } else {
+        // Large files without symbols: sliding windows
+        chunks = await fallbackChunk(content, documentId, fileId, totalTokenCount);
       }
-    } catch {
-      // Fall through to window chunking
     }
   }
 
-  // Large files without symbols: sliding windows
-  return await fallbackChunk(content, documentId, fileId, totalTokenCount);
+  // ── Filter out binary chunks (safety net) ────────────────────────────
+  const filtered: Chunk[] = [];
+  let binarySkipped = 0;
+  for (const chunk of chunks) {
+    if (isBinaryChunk(chunk.content)) {
+      log("warn", "chunker", `Binary chunk skipped for ${filePath} (chunk ${chunk.chunkIndex}, type ${chunk.chunkType})`);
+      binarySkipped++;
+    } else {
+      filtered.push(chunk);
+    }
+  }
+
+  return { chunks: filtered, binarySkipped };
 }
