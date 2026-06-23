@@ -206,6 +206,9 @@ export async function ingestPath(
           return;
         }
 
+        // Update counter immediately for every file
+        options?.progressCallback?.({ current: i + 1, total: walkedFiles.length });
+
         // Only show filename in progress if the file takes longer than 3s
         let slowFileTimer: ReturnType<typeof setTimeout> | undefined;
         slowFileTimer = setTimeout(() => {
