@@ -757,6 +757,29 @@ describe("ingestPath — edge cases (E5.3)", () => {
       .get()!;
     expect(integrity.integrity_check).toBe("ok");
   });
+
+  test("large file (>200KB) skips tree-sitter and uses window chunking", async () => {
+    // Use a dedicated subdirectory so leftover files from other tests don't interfere
+    const largeDir = join(TEST_DIR, "large-file-skip-symbol");
+    if (existsSync(largeDir)) rmSync(largeDir, { recursive: true, force: true });
+    mkdirSync(largeDir, { recursive: true });
+
+    // Generate a large TypeScript file (>200KB) with simple structure
+    let content = "// Large generated TypeScript file\n";
+    while (content.length < 210 * 1024) {
+      content += `export const item${Date.now()}_${Math.random().toString(36).slice(2)} = "value";\n`;
+    }
+    writeFileSync(join(largeDir, "large-generated.ts"), content);
+
+    const result = await ingestPath(db, largeDir, { recursive: false, reIndex: true });
+    expect(result.errors.length).toBe(0);
+    expect(result.chunksCreated).toBeGreaterThan(0);
+    // Verify chunks are window type (not symbol type), proving symbol extraction was skipped
+    const chunks = db.query("SELECT chunk_type FROM chunks WHERE file_id IN (SELECT id FROM files WHERE path LIKE '%large-generated.ts')").all() as { chunk_type: string }[];
+    for (const c of chunks) {
+      expect(c.chunk_type).toBe("window");
+    }
+  }, 30000);
 });
 
 // ---------------------------------------------------------------------------
