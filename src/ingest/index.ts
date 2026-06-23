@@ -45,14 +45,21 @@ export interface IngestResult {
   durationMs: number;
 }
 
+export interface ProgressUpdate {
+  current: number;
+  total: number;
+  currentFile?: string;
+  currentFileSize?: number;
+}
+
 export interface IngestOptions {
   recursive?: boolean;
   reIndex?: boolean;
   /** Project path for project_hash tagging on documents and symbols. */
   project?: string;
-  /** Called after each file chunk+embed for progress reporting.
-   *  Receives { current, total } — current is 0-based, total is filesFound. */
-  progressCallback?: (progress: { current: number; total: number }) => void;
+  /** Called after each file for progress reporting.
+   *  Receives { current, total, currentFile?, currentFileSize? }. */
+  progressCallback?: (update: ProgressUpdate) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -66,7 +73,7 @@ const MAX_FILE_SIZE = 2 * 1024 * 1024; // 2 MB
 const FILE_TIMEOUT_MS = 30_000; // 30 seconds per file
 
 /** Files exceeding this duration get logged to app.log as a warning. */
-const SLOW_FILE_WARN_MS = 30_000; // 30 seconds
+const SLOW_FILE_WARN_MS = 10_000; // 10 seconds
 
 // ---------------------------------------------------------------------------
 // Progress event helpers (gated on BRAIN_DEBUG=true)
@@ -190,11 +197,19 @@ export async function ingestPath(
         }
 
         if (fileStats.size > MAX_FILE_SIZE) {
-          result.errors.push(
-            `Skipped ${filePath}: file size ${fileStats.size} exceeds 2MB cap`,
-          );
+          const msg = `Skipped (too large, ${(fileStats.size / 1024 / 1024).toFixed(1)}MB): ${filePath}`;
+          log("info", "ingest", msg);
+          result.errors.push(msg);
           return;
         }
+
+        // Report which file is being processed
+        options?.progressCallback?.({
+          current: i + 1,
+          total: walkedFiles.length,
+          currentFile: filePath,
+          currentFileSize: fileStats.size,
+        });
 
         // Read file as raw buffer — binary-safe hashing (avoids encoding issues)
         let buf: ArrayBuffer;
@@ -208,7 +223,7 @@ export async function ingestPath(
 
         // Binary content guard: skip files with null bytes (safety net for misnamed binaries)
         if (isBinaryContent(new Uint8Array(buf))) {
-          log("debug", "ingest", `Skipped binary content: ${filePath}`);
+          log("info", "ingest", `Skipped (binary content): ${filePath}`);
           result.binarySkipped++;
           return;
         }
@@ -317,6 +332,12 @@ export async function ingestPath(
           return;
         }
 
+        // Slow-file warning after chunking completes
+        const fileElapsed = Date.now() - fileStart;
+        if (fileElapsed > SLOW_FILE_WARN_MS) {
+          log("warn", "ingest", `Slow file (${(fileElapsed / 1000).toFixed(1)}s): ${filePath} (${chunks ? chunks.length : 0} chunks)`);
+        }
+
         // ── 9. Insert chunks (includes token_count) ───────────────────────
         // Clean up old chunks for this file before inserting new ones
         db.run("DELETE FROM chunks WHERE file_id = ?", [fileId]);
@@ -416,7 +437,11 @@ export async function ingestPath(
 
         result.filesIndexed++;
         result.filesProcessed++;
-        options?.progressCallback?.({ current: result.filesProcessed, total: walkedFiles.length });
+        options?.progressCallback?.({
+          current: result.filesProcessed,
+          total: walkedFiles.length,
+          currentFile: undefined,
+        });
 
         // Per-file timing debug (BRAIN_DEBUG only)
         if (process.env.BRAIN_DEBUG === "true") {

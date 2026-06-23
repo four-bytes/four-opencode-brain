@@ -709,7 +709,7 @@ describe("ingestPath — edge cases (E5.3)", () => {
     expect(result.filesFound).toBe(1);
     expect(result.filesIndexed).toBe(0);
     expect(result.errors.length).toBeGreaterThanOrEqual(1);
-    expect(result.errors[0]).toContain("exceeds 2MB cap");
+    expect(result.errors[0]).toContain("Skipped (too large");
   });
 
   test("concurrent ingests don't corrupt database", async () => {

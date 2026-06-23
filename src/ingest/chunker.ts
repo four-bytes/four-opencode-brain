@@ -24,9 +24,8 @@ const MAX_TOKENS_PER_CHUNK = 1024;
 const TOKEN_WINDOW = 512;
 const TOKEN_OVERLAP = 77; // ~15 %
 
-/** Maximum file size for tree-sitter symbol extraction (200KB).
- *  Files larger than this skip symbol extraction entirely and go straight
- *  to windowed chunking, preventing event-loop blocks from sync WASM parse. */
+// Tree-sitter parses synchronously in WASM — large files block the event loop.
+// Skip symbol extraction for files exceeding this threshold; use windowed chunking instead.
 const SYMBOL_EXTRACTION_MAX_CHARS = 200 * 1024; // 200 KB
 
 // ---------------------------------------------------------------------------
@@ -454,12 +453,16 @@ export async function chunkContent(input: ChunkInput): Promise<ChunkResult> {
         },
       ];
     } else {
-      // Code files: try symbol extraction
+      // Code files: try symbol extraction (only for files small enough that
+      // synchronous WASM parsing won't block the event loop for too long).
       if (
-        language === "typescript" ||
-        language === "javascript" ||
-        language === "php" ||
-        language === "rust"
+        content.length <= SYMBOL_EXTRACTION_MAX_CHARS &&
+        (
+          language === "typescript" ||
+          language === "javascript" ||
+          language === "php" ||
+          language === "rust"
+        )
       ) {
         // Skip tree-sitter for large files — sync WASM parse blocks the event loop
         if (content.length > SYMBOL_EXTRACTION_MAX_CHARS) {
@@ -478,7 +481,7 @@ export async function chunkContent(input: ChunkInput): Promise<ChunkResult> {
           }
         }
       } else {
-        // Large files without symbols: sliding windows
+        // Large files or non-symbol languages: sliding windows
         chunks = await fallbackChunk(content, documentId, fileId, totalTokenCount);
       }
     }
