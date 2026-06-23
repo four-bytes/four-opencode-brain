@@ -9,6 +9,7 @@ import { join } from "path";
 import { openDatabase, createSchema } from "../src/schema";
 import { ingestPath } from "../src/ingest";
 import { isBinaryContent } from "../src/ingest/loader";
+import { isBinaryChunk } from "../src/ingest/chunker";
 import { sessionCache } from "../src/cache";
 import { brainSearch } from "../src/search/unified";
 
@@ -798,27 +799,51 @@ describe("isBinaryContent", () => {
     expect(isBinaryContent(buf)).toBe(true);
   });
 
-  test("large file (>64KB) with binary region at the end", () => {
-    const size = 70 * 1024;
-    const buf = new Uint8Array(size);
-    for (let i = 0; i < size; i++) {
-      buf[i] = 0x20; // space
-    }
-    // High concentration of non-printable chars in the last 4KB region (>30%)
-    const lastStart = size - 2000;
-    for (let i = lastStart; i < size; i++) {
-      buf[i] = 0x01; // non-printable control char
-    }
-    // 2000/4096 ≈ 49% non-printable in last sample region → exceeds 30% threshold
-    expect(isBinaryContent(buf)).toBe(true);
-  });
-
   test("file with >30% non-printable chars throughout", () => {
     const buf = new Uint8Array(1000);
     // 40% non-printable, 60% printable
     for (let i = 0; i < 1000; i++) {
       buf[i] = i < 400 ? 0x01 : 0x41; // 400 non-printable, 600 'A'
     }
+    expect(isBinaryContent(buf)).toBe(true);
+  });
+
+  test("large file (>64KB) with sparse null bytes caught by stride sampling", () => {
+    const size = 100 * 1024; // 100KB
+    const buf = new Uint8Array(size);
+    buf.fill(0x20); // printable spaces
+    // Insert null bytes at every 1024th position (stride-aligned: 1024 = 2×512)
+    for (let i = 1024; i < size; i += 1024) {
+      buf[i] = 0;
+    }
+    // Stride sampling at position 1024 catches the first null byte
+    expect(isBinaryContent(buf)).toBe(true);
+  });
+
+  test("large file (>64KB) with binary only in first 8KB region", () => {
+    const size = 70 * 1024;
+    const buf = new Uint8Array(size);
+    buf.fill(0x20); // printable spaces
+    // Insert null byte in the first 8KB region
+    buf[100] = 0;
+    // First 8KB thorough scan catches it
+    expect(isBinaryContent(buf)).toBe(true);
+  });
+
+  test("large file (>64KB) that is all printable text (should NOT be flagged)", () => {
+    const size = 70 * 1024;
+    const buf = new Uint8Array(size);
+    buf.fill(0x20); // space is printable
+    expect(isBinaryContent(buf)).toBe(false);
+  });
+
+  test("large file (>64KB) with null byte at stride position beyond first 8KB", () => {
+    const size = 200 * 1024; // 200KB
+    const buf = new Uint8Array(size);
+    buf.fill(0x41); // printable 'A'
+    // Place null byte at stride position 129×512 = 66048
+    // This is beyond the first 8KB scan (0–8191) and before the last 8KB (196608–204799)
+    buf[66048] = 0;
     expect(isBinaryContent(buf)).toBe(true);
   });
 
@@ -843,42 +868,27 @@ describe("isBinaryContent", () => {
 // ---------------------------------------------------------------------------
 
 describe("isBinaryChunk (per-chunk validation)", () => {
-  // Re-implement the private function from chunker.ts for testing
-  function isBinaryChunk(text: string): boolean {
-    const bytes = new TextEncoder().encode(text);
-    let nonPrintable = 0;
-    for (let i = 0; i < bytes.length; i++) {
-      if (bytes[i] === 0) return true;
-      if (bytes[i] < 0x20 && bytes[i] !== 0x09 && bytes[i] !== 0x0a && bytes[i] !== 0x0d) nonPrintable++;
-    }
-    return bytes.length > 0 && nonPrintable / bytes.length > 0.3;
-  }
-
-  test("normal text chunk (should pass)", () => {
+  test("normal text chunk (should NOT be flagged)", () => {
     expect(isBinaryChunk("This is a normal chunk of text with some code: fn() => {}")).toBe(false);
   });
 
-  test("chunk with embedded null byte (should be flagged)", () => {
-    const text = "normal text\u0000with null byte";
+  test("text with many U+FFFD replacement chars (>10% — should be flagged)", () => {
+    // 50 replacement chars out of 150 total = 33% → >10% threshold → flagged
+    const text = "\uFFFD".repeat(50) + "A".repeat(100);
     expect(isBinaryChunk(text)).toBe(true);
   });
 
-  test("chunk with >30% non-printable chars (should be flagged)", () => {
-    // Create a string with >30% non-printable chars
-    let text = "";
-    for (let i = 0; i < 10; i++) {
-      text += "\x01"; // non-printable
-      text += "A";    // printable
-    }
-    // 50% non-printable → should be flagged
-    expect(isBinaryChunk(text)).toBe(true);
+  test("text with a few U+FFFD chars (<10% — should NOT be flagged)", () => {
+    // 3 replacement chars out of 103 total ≈ 2.9% → <10% threshold → not flagged
+    const text = "\uFFFD".repeat(3) + "A".repeat(100);
+    expect(isBinaryChunk(text)).toBe(false);
   });
 
   test("empty chunk (edge case — should NOT be flagged)", () => {
     expect(isBinaryChunk("")).toBe(false);
   });
 
-  test("chunk with only whitespace (should NOT be flagged)", () => {
-    expect(isBinaryChunk("   \t\n  \n  ")).toBe(false);
+  test("real text with no replacement chars (should NOT be flagged)", () => {
+    expect(isBinaryChunk("const x = 42;\nexport default x;\n")).toBe(false);
   });
 });

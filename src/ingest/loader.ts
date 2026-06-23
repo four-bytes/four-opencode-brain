@@ -175,7 +175,6 @@ export function isBinaryExtension(filePath: string): boolean {
 }
 
 const FULL_SCAN_SIZE = 64 * 1024; // 64 KB — files ≤ this get fully scanned
-const SAMPLE_SIZE = 4 * 1024;      // 4 KB per sample region
 const BINARY_RATIO_THRESHOLD = 0.3;
 
 function isPrintable(b: number): boolean {
@@ -201,34 +200,36 @@ function isBinaryRegion(buf: Uint8Array, start: number, end: number): boolean {
  *
  * Strategy:
  * - Files ≤ 64KB: scans the **entire file content**
- * - Files  > 64KB: samples up to 3 regions — first 4KB, middle 4KB, last 4KB
+ * - Files  > 64KB: first 8KB thorough scan + statistical stride sampling + last 8KB thorough scan
  * - Null byte in any region → immediate binary
  */
 export function isBinaryContent(buf: Uint8Array): boolean {
-  if (buf.length === 0) return false; // empty file is not binary
+  if (buf.length === 0) return false;
 
   if (buf.length <= FULL_SCAN_SIZE) {
-    // Small file: scan entire content
+    // Small file: scan entire content (existing behavior)
     return isBinaryRegion(buf, 0, buf.length);
   }
 
-  // Large file: sample 3 regions
-  const half = Math.floor(buf.length / 2);
-  const halfSample = Math.floor(SAMPLE_SIZE / 2);
+  // Large file (>64KB): first 8KB thorough scan + stride sampling + last 8KB
 
-  const regions = [
-    { start: 0, end: SAMPLE_SIZE },                                       // first 4KB
-    { start: half - halfSample, end: half + Math.ceil(SAMPLE_SIZE / 2) }, // middle 4KB
-    { start: buf.length - SAMPLE_SIZE, end: buf.length },                 // last 4KB
-  ];
+  // 1. Thorough scan of first 8KB (catches ELF/PE/Mach-O headers)
+  const firstEnd = Math.min(8192, buf.length);
+  if (isBinaryRegion(buf, 0, firstEnd)) return true;
 
-  for (const region of regions) {
-    const clampedStart = Math.max(0, Math.min(region.start, buf.length - 1));
-    const clampedEnd = Math.max(clampedStart, Math.min(region.end, buf.length));
-    if (isBinaryRegion(buf, clampedStart, clampedEnd)) {
-      return true;
-    }
+  // 2. Statistical stride sampling: check every 512th byte across the ENTIRE file
+  let nonPrintable = 0;
+  let sampled = 0;
+  for (let i = 0; i < buf.length; i += 512) {
+    if (buf[i] === 0) return true; // null byte → immediate binary
+    if (!isPrintable(buf[i])) nonPrintable++;
+    sampled++;
   }
+  if (nonPrintable / sampled > BINARY_RATIO_THRESHOLD) return true;
+
+  // 3. Thorough scan of last 8KB (catches trailers, symbol tables)
+  const lastStart = Math.max(0, buf.length - 8192);
+  if (isBinaryRegion(buf, lastStart, buf.length)) return true;
 
   return false;
 }

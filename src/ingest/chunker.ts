@@ -73,16 +73,24 @@ export interface ChunkResult {
 
 /**
  * Check if a chunk's text content appears binary.
- * Encodes text to bytes and checks for null bytes or >30% non-printable chars.
+ *
+ * Uses U+FFFD replacement character density as the signal — TextDecoder
+ * produces U+FFFD for invalid byte sequences, so real text produces zero
+ * U+FFFD while binary source content produces many.
  */
-function isBinaryChunk(text: string): boolean {
-  const bytes = new TextEncoder().encode(text);
-  let nonPrintable = 0;
-  for (let i = 0; i < bytes.length; i++) {
-    if (bytes[i] === 0) return true;
-    if (bytes[i] < 0x20 && bytes[i] !== 0x09 && bytes[i] !== 0x0a && bytes[i] !== 0x0d) nonPrintable++;
+export function isBinaryChunk(text: string): boolean {
+  if (text.length === 0) return false;
+
+  // Count U+FFFD replacement characters — strong signal of binary source
+  let replacementCount = 0;
+  for (let i = 0; i < text.length; i++) {
+    if (text.charCodeAt(i) === 0xFFFD) {
+      replacementCount++;
+    }
   }
-  return bytes.length > 0 && nonPrintable / bytes.length > 0.3;
+
+  // If >10% of characters are replacement chars, the source was likely binary
+  return replacementCount / text.length > 0.1;
 }
 
 // ---------------------------------------------------------------------------
