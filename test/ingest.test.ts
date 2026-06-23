@@ -914,4 +914,13 @@ describe("isBinaryChunk (per-chunk validation)", () => {
   test("real text with no replacement chars (should NOT be flagged)", () => {
     expect(isBinaryChunk("const x = 42;\nexport default x;\n")).toBe(false);
   });
+
+  test("chunk with embedded null byte (should be flagged)", () => {
+    const text = "normal text\u0000with null byte";
+    expect(isBinaryChunk(text)).toBe(true);
+  });
+
+  test("chunk with null byte at start", () => {
+    expect(isBinaryChunk("\u0000hello")).toBe(true);
+  });
 });
