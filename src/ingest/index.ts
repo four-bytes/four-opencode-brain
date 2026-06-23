@@ -199,8 +199,10 @@ export async function ingestPath(
           return;
         }
 
+        result.filesProcessed++;
+
         // Update counter immediately for every file (BEFORE MAX_FILE_SIZE gate — skipped files still advance the counter)
-        options?.progressCallback?.({ current: i + 1, total: walkedFiles.length });
+        options?.progressCallback?.({ current: result.filesProcessed, total: walkedFiles.length });
 
         if (fileStats.size > MAX_FILE_SIZE) {
           const msg = `Skipped (too large, ${(fileStats.size / 1024 / 1024).toFixed(1)}MB): ${filePath}`;
@@ -212,7 +214,7 @@ export async function ingestPath(
         // Only show filename in progress if the file takes longer than 3s
         let slowFileTimer: ReturnType<typeof setTimeout> | undefined;
         slowFileTimer = setTimeout(() => {
-            options?.progressCallback?.({ current: i + 1, total: walkedFiles.length, currentFile: filePath, currentFileSize: fileStats.size });
+            options?.progressCallback?.({ current: result.filesProcessed, total: walkedFiles.length, currentFile: filePath, currentFileSize: fileStats.size });
         }, SLOW_FILE_DISPLAY_MS) as unknown as ReturnType<typeof setTimeout>;
 
         // Read file as raw buffer — binary-safe hashing (avoids encoding issues)
@@ -221,7 +223,6 @@ export async function ingestPath(
           buf = await Bun.file(filePath).arrayBuffer();
         } catch (err) {
           result.errors.push(`Failed to read ${filePath}: ${String(err)}`);
-          result.filesProcessed++;
           return;
         }
 
@@ -251,8 +252,6 @@ export async function ingestPath(
           if (existing && existing.content_hash === contentHash) {
             db.exec(`RELEASE SAVEPOINT ${spFile}`);
             result.filesSkipped++;
-            result.filesProcessed++;
-            options?.progressCallback?.({ current: result.filesProcessed, total: walkedFiles.length });
             return;
           }
         }
@@ -382,7 +381,6 @@ export async function ingestPath(
         }
 
         if (fileFailed) {
-          result.filesProcessed++;
           return;
         }
 
@@ -399,7 +397,6 @@ export async function ingestPath(
         }
 
         if (fileFailed) {
-          result.filesProcessed++;
           return;
         }
 
@@ -440,7 +437,6 @@ export async function ingestPath(
         db.exec(`RELEASE SAVEPOINT ${spFile}`);
 
         result.filesIndexed++;
-        result.filesProcessed++;
         if (slowFileTimer) clearTimeout(slowFileTimer);
         options?.progressCallback?.({ current: result.filesProcessed, total: walkedFiles.length });
 
