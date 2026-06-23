@@ -16,6 +16,7 @@ let _startupLogged = false;
 
 export function setLogClient(client: any): void {
   _logClient = client;
+  _startupLogged = false; // reset gate so startup message fires on the new client
 }
 
 function shouldLog(key: string, intervalMs: number = 60000): boolean {
