@@ -199,6 +199,9 @@ export async function ingestPath(
           return;
         }
 
+        // Update counter immediately for every file (BEFORE MAX_FILE_SIZE gate — skipped files still advance the counter)
+        options?.progressCallback?.({ current: i + 1, total: walkedFiles.length });
+
         if (fileStats.size > MAX_FILE_SIZE) {
           const msg = `Skipped (too large, ${(fileStats.size / 1024 / 1024).toFixed(1)}MB): ${filePath}`;
           log("info", "ingest", msg);
