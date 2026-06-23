@@ -88,9 +88,9 @@ export function isBinaryChunk(text: string): boolean {
   // Count U+FFFD replacement characters — strong signal of binary source
   let replacementCount = 0;
   for (let i = 0; i < text.length; i++) {
-    if (text.charCodeAt(i) === 0xFFFD) {
-      replacementCount++;
-    }
+    const c = text.charCodeAt(i);
+    if (c === 0) return true; // NUL byte → immediate binary signal
+    if (c === 0xFFFD) replacementCount++;
   }
 
   // If >10% of characters are replacement chars, the source was likely binary
