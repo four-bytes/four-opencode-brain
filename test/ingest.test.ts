@@ -836,10 +836,12 @@ describe("isBinaryContent", () => {
     const buf = new Uint8Array(size);
     buf.fill(0x20); // printable spaces
     // Insert null bytes at every 1024th position (stride-aligned: 1024 = 2×512)
-    for (let i = 1024; i < size; i += 1024) {
+    // Start at 8192 to place nulls outside the first 8KB thorough scan (0–8191)
+    // Stop before the last 8KB window to place nulls outside the final thorough scan
+    for (let i = 8192; i < size - 8192; i += 1024) {
       buf[i] = 0;
     }
-    // Stride sampling at position 1024 catches the first null byte
+    // Stride sampling at stride position 1024 catches the first null byte
     expect(isBinaryContent(buf)).toBe(true);
   });
 
