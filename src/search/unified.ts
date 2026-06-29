@@ -328,13 +328,67 @@ async function searchVec0(
       )
       .all(queryBlob, maxResults);
 
-    return rows.map((row) => ({
-      id: row.chunk_id,
-      title: `vec0:${row.chunk_id.slice(0, 8)}`,
-      excerpt: `[vec0 chunk] distance=${row.distance.toFixed(4)}`,
-      score: Math.max(0, 1 - row.distance),
-      content_type: "chunk" as const,
-    }));
+    if (rows.length === 0) return [];
+
+    // Batch-lookup real content from chunks table for all vec0 results
+    const chunkIds = rows.map((r) => r.chunk_id);
+    const placeholders = chunkIds.map(() => "?").join(",");
+    const chunkRows = db
+      .query(
+        `SELECT c.id, c.content, c.symbol, c.chunk_type, c.start_line, c.end_line,
+                c.chunk_index, c.kind, d.path AS source_path, d.title AS doc_title
+         FROM chunks c
+         JOIN documents d ON d.id = c.document_id
+         WHERE c.id IN (${placeholders})`,
+      )
+      .all(...chunkIds) as Array<{
+      id: string;
+      content: string;
+      symbol: string | null;
+      chunk_type: string;
+      start_line: number | null;
+      end_line: number | null;
+      chunk_index: number;
+      kind: string | null;
+      source_path: string;
+      doc_title: string;
+    }>;
+
+    const chunkMap = new Map(chunkRows.map((r) => [r.id, r]));
+
+    return rows.map((row) => {
+      const chunk = chunkMap.get(row.chunk_id);
+      if (!chunk) {
+        // Fallback: chunk not found in chunks table (shouldn't happen, but be safe)
+        return {
+          id: row.chunk_id,
+          title: `vec0:${row.chunk_id.slice(0, 8)}`,
+          excerpt: `[vec0 chunk] distance=${row.distance.toFixed(4)}`,
+          score: Math.max(0, 1 - row.distance),
+          content_type: "chunk" as const,
+        };
+      }
+      const excerpt =
+        chunk.content.length > 80
+          ? chunk.content.slice(0, 80) + "..."
+          : chunk.content;
+      return {
+        id: chunk.id,
+        title:
+          chunk.symbol ??
+          `${chunk.doc_title}:${chunk.chunk_type}#${chunk.chunk_index}`,
+        excerpt,
+        score: Math.max(0, 1 - row.distance),
+        content_type: "chunk" as const,
+        source_path: chunk.source_path ?? undefined,
+        metadata: {
+          kind: chunk.kind ?? undefined,
+          chunk_type: chunk.chunk_type,
+          start_line: chunk.start_line ?? undefined,
+          end_line: chunk.end_line ?? undefined,
+        },
+      };
+    });
   } catch {
     return [];
   }
