@@ -331,7 +331,8 @@ async function searchVec0(
     if (rows.length === 0) return [];
 
     // Batch-lookup real content from chunks table for all vec0 results
-    const chunkIds = rows.map((r) => r.chunk_id);
+    const MAX_BATCH_IDS = 500; // SQLite host-parameter safety ceiling
+    const chunkIds = rows.slice(0, MAX_BATCH_IDS).map((r) => r.chunk_id);
     const placeholders = chunkIds.map(() => "?").join(",");
     const chunkRows = db
       .query(
@@ -370,7 +371,7 @@ async function searchVec0(
       }
       const excerpt =
         chunk.content.length > 80
-          ? chunk.content.slice(0, 80) + "..."
+          ? chunk.content.slice(0, 77) + "..."
           : chunk.content;
       return {
         id: chunk.id,
