@@ -53,11 +53,11 @@ Issues → Branch → PR → Merge (feature workflow)
 
 **CI:** `package.json` pins to a GitHub tag:
 ```json
-"@four-bytes/opencode-plugin-lib": "github:four-bytes/four-opencode-plugin-lib#v0.8.2"
+"@four-bytes/opencode-plugin-lib": "github:four-bytes/four-opencode-plugin-lib#v0.8.4"
 ```
 When plugin-lib changes are merged:
 1. Bump version in plugin-lib's `package.json`
-2. Tag: `git tag v0.8.3 && git push --tags`
+2. Tag: `git tag v0.8.4 && git push --tags`
 3. Update all dependent plugins' `package.json` + `bun.lock` to new tag
 
 **Local dev:** Uses `bun link` to point `node_modules/@four-bytes/opencode-plugin-lib` at the local source `~/four-opencode-plugin-lib`:
