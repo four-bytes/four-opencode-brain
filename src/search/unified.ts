@@ -357,7 +357,7 @@ async function searchVec0(
 
     const chunkMap = new Map(chunkRows.map((r) => [r.id, r]));
 
-    return rows.map((row) => {
+    return rows.slice(0, MAX_BATCH_IDS).map((row) => {
       const chunk = chunkMap.get(row.chunk_id);
       if (!chunk) {
         // Fallback: chunk not found in chunks table (shouldn't happen, but be safe)
