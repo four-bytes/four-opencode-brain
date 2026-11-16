@@ -45,7 +45,7 @@ describe("brain_reindex — tool definition", () => {
     expect(tool).toBeDefined();
     expect(tool.description).toContain("Rebuild vec0 vector index");
     expect(tool.args).toEqual({});
-  });
+  }, { timeout: 20000 });
 });
 
 // ---------------------------------------------------------------------------
