@@ -230,6 +230,7 @@ const _serverPlugin = async (input: PluginInput) => {
       return withSessionId(toolCtx.sessionID, async () => {
       const db = initBrainDatabase();
       const resolvedPath = resolve(toolCtx.directory, args.path);
+      let timeoutMs = calculateIngestTimeout(0);
       try {
         // Resolve path relative to project directory (like RAG plugin does)
         const name = basename(resolvedPath);
@@ -243,7 +244,7 @@ const _serverPlugin = async (input: PluginInput) => {
         } catch {
           // fallback: use default
         }
-        const timeoutMs = calculateIngestTimeout(fileCount);
+        timeoutMs = calculateIngestTimeout(fileCount);
         let lastUpdate = 0;
 
         const result = await withTimeout(
