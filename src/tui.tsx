@@ -4,7 +4,7 @@ import { createSignal, Show } from "solid-js";
 import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui";
 import type { RGBA } from "@opentui/core";
 import { useServiceBus } from "@four-bytes/opencode-plugin-lib/tui";
-import { ProgressBar } from "@four-bytes/opencode-plugin-lib/tui-components";
+import { ProgressBar } from "./progress";
 import type { BrainStatusEvent } from "./event-bus";
 import { Spinner } from "./spinner";
 import { readFileSync, existsSync } from "fs";
