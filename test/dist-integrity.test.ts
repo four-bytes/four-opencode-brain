@@ -1,8 +1,10 @@
 import { describe, test, expect } from "bun:test";
-import { readFileSync } from "fs";
+import { readFileSync, existsSync } from "fs";
 import { join } from "path";
 
 const DIST_PATH = join(import.meta.dir, "..", "dist", "four-opencode-brain.js");
+const TUI_DIST_PATH = join(import.meta.dir, "..", "dist", "four-opencode-brain-tui.jsx");
+const PROGRESS_DIST_PATH = join(import.meta.dir, "..", "dist", "progress.jsx");
 
 describe("dist-integrity", () => {
   const dist = readFileSync(DIST_PATH, "utf-8");
@@ -28,5 +30,14 @@ describe("dist-integrity", () => {
     const hasPackageJson = /package\.json/.test(dist);
     expect(hasReadFileSync).toBe(true);
     expect(hasPackageJson).toBe(true);
+  });
+
+  test("TUI bundle does not reference broken tui-components import", () => {
+    const tui = readFileSync(TUI_DIST_PATH, "utf-8");
+    expect(tui).not.toContain("tui-components");
+  });
+
+  test("progress.jsx is emitted as the inlined replacement", () => {
+    expect(existsSync(PROGRESS_DIST_PATH)).toBe(true);
   });
 });
