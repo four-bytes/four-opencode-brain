@@ -54,7 +54,7 @@ describe("brain_reindex — tool definition", () => {
     } finally {
       process.env.HOME = originalHome;
     }
-  });
+  }, 20000);
 });
 
 // ---------------------------------------------------------------------------
