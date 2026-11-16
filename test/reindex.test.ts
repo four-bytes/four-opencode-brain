@@ -7,6 +7,9 @@ import { Database } from "bun:sqlite";
 import { createSchema, generateId, hashContent } from "../src/schema";
 import { brainSearch } from "../src/search/unified";
 import plugin from "../src/four-opencode-brain";
+import { mkdtempSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
 
 let db: Database;
 
@@ -34,18 +37,24 @@ function tableExists(name: string): boolean {
 
 describe("brain_reindex — tool definition", () => {
   test("plugin exports brain_reindex tool", async () => {
-    const result = await plugin.server({
-      client: {} as any,
-      project: "test",
-      directory: "/tmp",
-      $: {} as any,
-    });
-    expect(result.tool).toHaveProperty("brain_reindex");
-    const tool = result.tool.brain_reindex;
-    expect(tool).toBeDefined();
-    expect(tool.description).toContain("Rebuild vec0 vector index");
-    expect(tool.args).toEqual({});
-  }, { timeout: 20000 });
+    const originalHome = process.env.HOME;
+    process.env.HOME = mkdtempSync(join(tmpdir(), "brain-test-"));
+    try {
+      const result = await plugin.server({
+        client: {} as any,
+        project: "test",
+        directory: "/tmp",
+        $: {} as any,
+      });
+      expect(result.tool).toHaveProperty("brain_reindex");
+      const tool = result.tool.brain_reindex;
+      expect(tool).toBeDefined();
+      expect(tool.description).toContain("Rebuild vec0 vector index");
+      expect(tool.args).toEqual({});
+    } finally {
+      process.env.HOME = originalHome;
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
