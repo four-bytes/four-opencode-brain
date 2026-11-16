@@ -217,238 +217,241 @@ export async function ingestPath(
             options?.progressCallback?.({ current: result.filesProcessed, total: walkedFiles.length, currentFile: filePath, currentFileSize: fileStats.size });
         }, SLOW_FILE_DISPLAY_MS) as unknown as ReturnType<typeof setTimeout>;
 
-        // Read file as raw buffer — binary-safe hashing (avoids encoding issues)
-        let buf: ArrayBuffer;
         try {
-          buf = await Bun.file(filePath).arrayBuffer();
-        } catch (err) {
-          result.errors.push(`Failed to read ${filePath}: ${String(err)}`);
-          return;
-        }
-
-        // Binary content guard: skip files with null bytes (safety net for misnamed binaries)
-        if (isBinaryContent(new Uint8Array(buf))) {
-          log("info", "ingest", `Skipped (binary content): ${filePath}`);
-          result.binarySkipped++;
-          return;
-        }
-
-        // ── Per-file SAVEPOINT for atomic DB writes ────────────────────────
-        const spFile = "brain_file_" + generateId();
-        db.exec(`SAVEPOINT ${spFile}`);
-        let fileFailed = false;
-
-        const contentHash = hashBuffer(new Uint8Array(buf));
-        const size = buf.byteLength;
-
-        // ── 5. Content-hash check — skip if unchanged (unless reIndex) ──
-        if (!reIndex) {
-          const existing = db
-            .query<{ content_hash: string }, []>(
-              "SELECT content_hash FROM files WHERE path = ?",
-            )
-            .get(filePath);
-
-          if (existing && existing.content_hash === contentHash) {
-            db.exec(`RELEASE SAVEPOINT ${spFile}`);
-            result.filesSkipped++;
+          // Read file as raw buffer — binary-safe hashing (avoids encoding issues)
+          let buf: ArrayBuffer;
+          try {
+            buf = await Bun.file(filePath).arrayBuffer();
+          } catch (err) {
+            result.errors.push(`Failed to read ${filePath}: ${String(err)}`);
             return;
           }
-        }
 
-        // Convert buffer to text for document/chunk storage
-        const content = new TextDecoder().decode(buf);
-
-        // ── 6. Upsert files table (FK-preserving: keeps rowid for FTS5) ─
-        const fileId = generateId();
-        const mtime = Date.now();
-
-        try {
-          db.run(
-            `INSERT INTO files (id, path, content_hash, mtime, lang, size, indexed_at)
-             VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
-             ON CONFLICT(path) DO UPDATE SET
-               content_hash = excluded.content_hash,
-               mtime         = excluded.mtime,
-               lang          = excluded.lang,
-               size          = excluded.size,
-               indexed_at    = datetime('now')`,
-            [fileId, filePath, contentHash, mtime, language, size],
-          );
-        } catch (err) {
-          db.exec(`ROLLBACK TO SAVEPOINT ${spFile}`);
-          result.errors.push(`Failed to insert file ${filePath}: ${String(err)}`);
-          return;
-        }
-
-        // ── 7. Insert documents table ──────────────────────────────────
-        const docId = generateId();
-        const fileName = filePath.split("/").pop() ?? filePath;
-        const filetype = filePath.split(".").pop() ?? "unknown";
-
-        // Snapshot result counters so we can revert this file's increments on abort
-        const docCountBefore = result.documentsCreated;
-        const chunkCountBefore = result.chunksCreated;
-
-        try {
-          db.run(
-            `INSERT OR IGNORE INTO documents (id, title, content, content_hash, type, path, language, filetype, project_hash)
-             VALUES (?, ?, ?, ?, 'file', ?, ?, ?, ?)`,
-            [docId, fileName, content, contentHash, filePath, language, filetype, projectHash],
-          );
-
-          // Check if document was actually inserted (not dedup'd)
-          const docCount = db
-            .query<{ c: number }, []>(
-              "SELECT COUNT(*) AS c FROM documents WHERE path = ? AND content_hash = ?",
-            )
-            .get(filePath, contentHash)!.c;
-
-          if (docCount > 0) {
-            result.documentsCreated++;
+          // Binary content guard: skip files with null bytes (safety net for misnamed binaries)
+          if (isBinaryContent(new Uint8Array(buf))) {
+            log("info", "ingest", `Skipped (binary content): ${filePath}`);
+            result.binarySkipped++;
+            return;
           }
-        } catch (err) {
-          db.exec(`ROLLBACK TO SAVEPOINT ${spFile}`);
-          result.errors.push(`Failed to insert document ${filePath}: ${String(err)}`);
-          return;
-        }
 
-        // ── 8. Chunk content (symbol extraction happens inside chunker) ──
-        const totalLines = content.split("\n").length;
+          // ── Per-file SAVEPOINT for atomic DB writes ────────────────────────
+          const spFile = "brain_file_" + generateId();
+          db.exec(`SAVEPOINT ${spFile}`);
+          let fileFailed = false;
 
-        let chunks: Chunk[];
-        let chunkResult: ChunkResult;
-        try {
-          chunkResult = await chunkContent({
-            documentId: docId,
-            fileId,
-            content,
-            filePath,
-            language,
-            totalLines,
-          });
-          chunks = chunkResult.chunks;
-          result.binarySkipped += chunkResult.binarySkipped;
-        } catch (err) {
-          db.exec(`ROLLBACK TO SAVEPOINT ${spFile}`);
-          result.errors.push(`Failed to chunk ${filePath}: ${String(err)}`);
-          return;
-        }
+          const contentHash = hashBuffer(new Uint8Array(buf));
+          const size = buf.byteLength;
 
-        // Slow-file warning after chunking completes
-        const fileElapsed = Date.now() - fileStart;
-        if (fileElapsed > SLOW_FILE_WARN_MS) {
-          log("warn", "ingest", `Slow file (${(fileElapsed / 1000).toFixed(1)}s): ${filePath} (${chunks ? chunks.length : 0} chunks)`);
-        }
+          // ── 5. Content-hash check — skip if unchanged (unless reIndex) ──
+          if (!reIndex) {
+            const existing = db
+              .query<{ content_hash: string }, []>(
+                "SELECT content_hash FROM files WHERE path = ?",
+              )
+              .get(filePath);
 
-        // ── 9. Insert chunks (includes token_count) ───────────────────────
-        // Clean up old chunks for this file before inserting new ones
-        db.run("DELETE FROM chunks WHERE file_id = ?", [fileId]);
-        const newChunkIds: string[] = [];
-        for (const chunk of chunks) {
-          try {
-            db.run(
-              `INSERT OR IGNORE INTO chunks
-               (id, document_id, file_id, chunk_index, content, content_hash,
-                symbol, kind, start_line, end_line, chunk_type, token_count)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-              [
-                chunk.id,
-                chunk.documentId,
-                chunk.fileId,
-                chunk.chunkIndex,
-                chunk.content,
-                chunk.contentHash,
-                chunk.symbol,
-                chunk.kind,
-                chunk.startLine,
-                chunk.endLine,
-                chunk.chunkType,
-                chunk.tokenCount,
-              ],
-            );
-
-            result.chunksCreated++;
-            newChunkIds.push(chunk.id);
-          } catch (err) {
-            db.exec(`ROLLBACK TO SAVEPOINT ${spFile}`);
-            result.errors.push(
-              `Failed to insert chunk ${chunk.chunkIndex} for ${filePath}: ${String(err)}`,
-            );
-            fileFailed = true;
-            break;
-          }
-        }
-
-        if (fileFailed) {
-          return;
-        }
-
-        // ── 10. Embed chunks (vec0) — non-fatal if unavailable ─────────
-        if (newChunkIds.length > 0 && loadVec0(db)) {
-          try {
-            const embedded = await embedChunks(db, newChunkIds);
-            result.chunksEmbedded += embedded;
-          } catch (err) {
-            db.exec(`ROLLBACK TO SAVEPOINT ${spFile}`);
-            result.errors.push(`Embedding failed: ${String(err)}`);
-            fileFailed = true;
-          }
-        }
-
-        if (fileFailed) {
-          return;
-        }
-
-        // ── 11. Populate symbols table (global symbol store) ─────────────
-        for (const chunk of chunks) {
-          if (chunk.symbol) {
-            try {
-              const symId = generateId();
-              db.run(
-                `INSERT OR IGNORE INTO symbols (id, name, qualified_name, kind, project_hash, file_path, document_id)
-                 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-                [
-                  symId,
-                  chunk.symbol.split(".").pop() ?? chunk.symbol,
-                  chunk.symbol,
-                  chunk.kind ?? null,
-                  projectHash,
-                  filePath,
-                  docId,
-                ],
-              );
-            } catch {
-              // Silently skip symbol insertion failures
+            if (existing && existing.content_hash === contentHash) {
+              db.exec(`RELEASE SAVEPOINT ${spFile}`);
+              result.filesSkipped++;
+              return;
             }
           }
-        }
 
-        // ── Abort guard: if timeout fired, ROLLBACK (don't commit) and skip counters ──
-        if (aborted.get(i)) {
-          db.exec(`ROLLBACK TO SAVEPOINT ${spFile}`);
+          // Convert buffer to text for document/chunk storage
+          const content = new TextDecoder().decode(buf);
+
+          // ── 6. Upsert files table (FK-preserving: keeps rowid for FTS5) ─
+          const fileId = generateId();
+          const mtime = Date.now();
+
+          try {
+            db.run(
+              `INSERT INTO files (id, path, content_hash, mtime, lang, size, indexed_at)
+               VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+               ON CONFLICT(path) DO UPDATE SET
+                 content_hash = excluded.content_hash,
+                 mtime         = excluded.mtime,
+                 lang          = excluded.lang,
+                 size          = excluded.size,
+                 indexed_at    = datetime('now')`,
+              [fileId, filePath, contentHash, mtime, language, size],
+            );
+          } catch (err) {
+            db.exec(`ROLLBACK TO SAVEPOINT ${spFile}`);
+            result.errors.push(`Failed to insert file ${filePath}: ${String(err)}`);
+            return;
+          }
+
+          // ── 7. Insert documents table ──────────────────────────────────
+          const docId = generateId();
+          const fileName = filePath.split("/").pop() ?? filePath;
+          const filetype = filePath.split(".").pop() ?? "unknown";
+
+          // Snapshot result counters so we can revert this file's increments on abort
+          const docCountBefore = result.documentsCreated;
+          const chunkCountBefore = result.chunksCreated;
+
+          try {
+            db.run(
+              `INSERT OR IGNORE INTO documents (id, title, content, content_hash, type, path, language, filetype, project_hash)
+               VALUES (?, ?, ?, ?, 'file', ?, ?, ?, ?)`,
+              [docId, fileName, content, contentHash, filePath, language, filetype, projectHash],
+            );
+
+            // Check if document was actually inserted (not dedup'd)
+            const docCount = db
+              .query<{ c: number }, []>(
+                "SELECT COUNT(*) AS c FROM documents WHERE path = ? AND content_hash = ?",
+              )
+              .get(filePath, contentHash)!.c;
+
+            if (docCount > 0) {
+              result.documentsCreated++;
+            }
+          } catch (err) {
+            db.exec(`ROLLBACK TO SAVEPOINT ${spFile}`);
+            result.errors.push(`Failed to insert document ${filePath}: ${String(err)}`);
+            return;
+          }
+
+          // ── 8. Chunk content (symbol extraction happens inside chunker) ──
+          const totalLines = content.split("\n").length;
+
+          let chunks: Chunk[];
+          let chunkResult: ChunkResult;
+          try {
+            chunkResult = await chunkContent({
+              documentId: docId,
+              fileId,
+              content,
+              filePath,
+              language,
+              totalLines,
+            });
+            chunks = chunkResult.chunks;
+            result.binarySkipped += chunkResult.binarySkipped;
+          } catch (err) {
+            db.exec(`ROLLBACK TO SAVEPOINT ${spFile}`);
+            result.errors.push(`Failed to chunk ${filePath}: ${String(err)}`);
+            return;
+          }
+
+          // Slow-file warning after chunking completes
+          const fileElapsed = Date.now() - fileStart;
+          if (fileElapsed > SLOW_FILE_WARN_MS) {
+            log("warn", "ingest", `Slow file (${(fileElapsed / 1000).toFixed(1)}s): ${filePath} (${chunks ? chunks.length : 0} chunks)`);
+          }
+
+          // ── 9. Insert chunks (includes token_count) ───────────────────────
+          // Clean up old chunks for this file before inserting new ones
+          db.run("DELETE FROM chunks WHERE file_id = ?", [fileId]);
+          const newChunkIds: string[] = [];
+          for (const chunk of chunks) {
+            try {
+              db.run(
+                `INSERT OR IGNORE INTO chunks
+                 (id, document_id, file_id, chunk_index, content, content_hash,
+                  symbol, kind, start_line, end_line, chunk_type, token_count)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                [
+                  chunk.id,
+                  chunk.documentId,
+                  chunk.fileId,
+                  chunk.chunkIndex,
+                  chunk.content,
+                  chunk.contentHash,
+                  chunk.symbol,
+                  chunk.kind,
+                  chunk.startLine,
+                  chunk.endLine,
+                  chunk.chunkType,
+                  chunk.tokenCount,
+                ],
+              );
+
+              result.chunksCreated++;
+              newChunkIds.push(chunk.id);
+            } catch (err) {
+              db.exec(`ROLLBACK TO SAVEPOINT ${spFile}`);
+              result.errors.push(
+                `Failed to insert chunk ${chunk.chunkIndex} for ${filePath}: ${String(err)}`,
+              );
+              fileFailed = true;
+              break;
+            }
+          }
+
+          if (fileFailed) {
+            return;
+          }
+
+          // ── 10. Embed chunks (vec0) — non-fatal if unavailable ─────────
+          if (newChunkIds.length > 0 && loadVec0(db)) {
+            try {
+              const embedded = await embedChunks(db, newChunkIds);
+              result.chunksEmbedded += embedded;
+            } catch (err) {
+              db.exec(`ROLLBACK TO SAVEPOINT ${spFile}`);
+              result.errors.push(`Embedding failed: ${String(err)}`);
+              fileFailed = true;
+            }
+          }
+
+          if (fileFailed) {
+            return;
+          }
+
+          // ── 11. Populate symbols table (global symbol store) ─────────────
+          for (const chunk of chunks) {
+            if (chunk.symbol) {
+              try {
+                const symId = generateId();
+                db.run(
+                  `INSERT OR IGNORE INTO symbols (id, name, qualified_name, kind, project_hash, file_path, document_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                  [
+                    symId,
+                    chunk.symbol.split(".").pop() ?? chunk.symbol,
+                    chunk.symbol,
+                    chunk.kind ?? null,
+                    projectHash,
+                    filePath,
+                    docId,
+                  ],
+                );
+              } catch {
+                // Silently skip symbol insertion failures
+              }
+            }
+          }
+
+          // ── Abort guard: if timeout fired, ROLLBACK (don't commit) and skip counters ──
+          if (aborted.get(i)) {
+            db.exec(`ROLLBACK TO SAVEPOINT ${spFile}`);
+            db.exec(`RELEASE SAVEPOINT ${spFile}`);
+            result.chunksCreated -= result.chunksCreated - chunkCountBefore;
+            result.documentsCreated -= result.documentsCreated - docCountBefore;
+            return;
+          }
+
+          // ── RELEASE per-file SAVEPOINT ─────────────────────────────
           db.exec(`RELEASE SAVEPOINT ${spFile}`);
-          result.chunksCreated -= result.chunksCreated - chunkCountBefore;
-          result.documentsCreated -= result.documentsCreated - docCountBefore;
-          return;
-        }
 
-        // ── RELEASE per-file SAVEPOINT ─────────────────────────────
-        db.exec(`RELEASE SAVEPOINT ${spFile}`);
+          result.filesIndexed++;
+          options?.progressCallback?.({ current: result.filesProcessed, total: walkedFiles.length });
 
-        result.filesIndexed++;
-        if (slowFileTimer) clearTimeout(slowFileTimer);
-        options?.progressCallback?.({ current: result.filesProcessed, total: walkedFiles.length });
+          // Per-file timing debug (BRAIN_DEBUG only)
+          if (process.env.BRAIN_DEBUG === "true") {
+            log("debug", "ingest", `processed ${result.filesProcessed}/${walkedFiles.length}: ${filePath} (${Date.now() - fileStart}ms)`);
+          }
 
-        // Per-file timing debug (BRAIN_DEBUG only)
-        if (process.env.BRAIN_DEBUG === "true") {
-          log("debug", "ingest", `processed ${result.filesProcessed}/${walkedFiles.length}: ${filePath} (${Date.now() - fileStart}ms)`);
-        }
-
-        // Slow-file warning: log to app.log for diagnostics
-        const elapsed = Date.now() - fileStart;
-        if (elapsed > SLOW_FILE_WARN_MS) {
-          log("warn", `ingest.slow_file.${filePath}`, `${filePath} took ${elapsed}ms`, { path: filePath, durationMs: elapsed, size });
+          // Slow-file warning: log to app.log for diagnostics
+          const elapsed = Date.now() - fileStart;
+          if (elapsed > SLOW_FILE_WARN_MS) {
+            log("warn", `ingest.slow_file.${filePath}`, `${filePath} took ${elapsed}ms`, { path: filePath, durationMs: elapsed, size });
+          }
+        } finally {
+          if (slowFileTimer) clearTimeout(slowFileTimer);
         }
     }
 
