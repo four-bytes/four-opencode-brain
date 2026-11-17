@@ -15,10 +15,10 @@
     "four-bytes"
   ],
   "dependencies": {
-    "@four-bytes/opencode-plugin-lib": "github:four-bytes/four-opencode-plugin-lib#v0.8.5",
+    "@four-bytes/opencode-plugin-lib": "github:four-bytes/four-opencode-plugin-lib#v0.8.8",
     "@opencode-ai/plugin": "1.16.2",
-    "@opentui/core": "0.3.2",
-    "@opentui/solid": "0.3.2",
+    "@opentui/core": "0.4.5",
+    "@opentui/solid": "0.4.5",
     "node-llama-cpp": "3.18.1",
     "solid-js": "1.9.13",
     "tree-sitter-javascript": "0.25.0",
