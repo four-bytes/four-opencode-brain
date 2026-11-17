@@ -4,7 +4,7 @@ import { rmSync, renameSync } from "node:fs";
 rmSync("dist", { recursive: true, force: true });
 
 // 2. Server build: Bun bundler on clean dist (FIRST — no stale artifacts)
-const externals = ["@opencode-ai/*"];
+const externals: string[] = [];
 if (process.env.BRAIN_EMBED_ENABLE === "true" || process.env.BRAIN_EMBED_ENABLE === "1") {
   externals.push("@node-llama-cpp/*");
 }
