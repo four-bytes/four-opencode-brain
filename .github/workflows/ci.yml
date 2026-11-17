@@ -3,14 +3,8 @@ name: CI
 on:
   push:
     branches: [main]
-    paths:
-      - 'package.json'
-      - 'bun.lock'
   pull_request:
     branches: [main]
-    paths:
-      - 'package.json'
-      - 'bun.lock'
 
 jobs:
   ci:
