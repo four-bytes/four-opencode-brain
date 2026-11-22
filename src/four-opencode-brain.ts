@@ -23,6 +23,11 @@ import {
 import { brainSystemPrompt } from "./hooks/system-prompt";
 import { onChatMessage, onSessionIdle } from "./hooks/auto-capture";
 import { installBrainCommands } from "./commands/brain-slash";
+import { DEFAULT_LAYERS, type Layer } from "./layers.js";
+import { createHookContext, runLayerPipelineWithSources } from "./hook.js";
+import { RepoProfileLayer } from "./layers/repo-profile.js";
+import { TaskSliceLayer } from "./layers/task-slice.js";
+import { sanitizeLayerContent } from "./sanitize.js";
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync, statSync } from "fs";
 import { basename, join, resolve, isAbsolute } from "path";
@@ -707,10 +712,17 @@ const _serverPlugin = async (input: PluginInput) => {
     },
   });
 
+  const layers: Layer[] = [new RepoProfileLayer(), new TaskSliceLayer()];
+  const layerCtx = createHookContext(DEFAULT_LAYERS, layers);
+
   return {
     "experimental.chat.system.transform": async (_hookInput, output) => {
       output.system.push(brainSystemPrompt());
       if (_hookInput?.sessionID) setSessionId(_hookInput.sessionID);
+      const layerContents = await runLayerPipelineWithSources(layerCtx);
+      for (const lc of layerContents) {
+        if (lc.content.trim()) output.system.push(sanitizeLayerContent(lc.content));
+      }
     },
     "chat.message": async (_hookInput, output) => {
       if (_hookInput?.sessionID) setSessionId(_hookInput.sessionID);
