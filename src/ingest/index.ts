@@ -75,7 +75,8 @@ const FILE_TIME_BUDGET_MS = (() => {
   const raw = process.env.BRAIN_FILE_TIME_BUDGET_MS;
   if (!raw) return 2_000;
   const n = Number(raw);
-  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 2_000;
+  const ms = Number.isFinite(n) && n > 0 ? Math.floor(n) : 2_000;
+  return Math.max(1, ms);
 })();
 
 /** Per-file processing timeout (30 seconds). */
@@ -360,6 +361,8 @@ export async function ingestPath(
             if (err instanceof FileBudgetExceededError) {
               db.exec(`ROLLBACK TO SAVEPOINT ${spFile}`);
               db.exec(`RELEASE SAVEPOINT ${spFile}`);
+              result.documentsCreated = docCountBefore;
+              result.chunksCreated = chunkCountBefore;
               log(
                 "warn",
                 "ingest.budget",

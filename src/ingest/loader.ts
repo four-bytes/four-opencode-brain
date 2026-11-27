@@ -165,8 +165,7 @@ export interface WalkResult {
 
 const GENERATED_ARTIFACT_PATTERNS: RegExp[] = [
   /[-.]min\.(?:js|mjs|cjs|css)$/i,
-  /\.bundle\.js$/i,
-  /\.(?:js|css)\.map$/i,
+  /\.bundle\.(?:js|mjs|cjs|css)$/i,
   /\.map$/i,
 ];
 
@@ -217,7 +216,7 @@ export function analyzeLineLengths(buf: Uint8Array): LineStats {
   if (currentLineLength > maxLineLength) maxLineLength = currentLineLength;
 
   const lineCount = newlineCount + 1;
-  const avgLineLength = Math.round(totalBytes / lineCount);
+  const avgLineLength = Math.round((totalBytes - newlineCount) / lineCount);
   return { lineCount, maxLineLength, avgLineLength };
 }
 
