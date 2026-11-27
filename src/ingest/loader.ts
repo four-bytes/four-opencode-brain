@@ -156,6 +156,98 @@ export interface WalkedFile {
 export interface WalkResult {
   files: WalkedFile[];
   skippedExt: number;
+  skippedGenerated: number;
+}
+
+// ---------------------------------------------------------------------------
+// Generated artifact filter
+// ---------------------------------------------------------------------------
+
+const GENERATED_ARTIFACT_PATTERNS: RegExp[] = [
+  /\.min\.(?:js|mjs|cjs|css)$/i,
+  /[-.]min\.(?:js|mjs|cjs|css)$/i,
+  /\.bundle\.js$/i,
+  /\.(?:js|css)\.map$/i,
+  /\.map$/i,
+];
+
+/** True for minified/bundled JS/CSS and source maps — never index these. */
+export function isGeneratedArtifact(filePath: string): boolean {
+  return GENERATED_ARTIFACT_PATTERNS.some((re) => re.test(filePath));
+}
+
+// ---------------------------------------------------------------------------
+// Long-line analysis (minified/generated text detection)
+// ---------------------------------------------------------------------------
+
+export const MAX_LINE_LENGTH = 20 * 1024; // 20 KB single line
+export const MAX_AVG_LINE_LENGTH = 1024;  // 1 KB average
+
+export interface LineStats {
+  lineCount: number;
+  maxLineLength: number;
+  avgLineLength: number;
+}
+
+export interface PathologicalText {
+  pathological: boolean;
+  reason: string | null;
+  stats: LineStats;
+}
+
+/** Scan raw bytes and derive line count / max / average line lengths. */
+export function analyzeLineLengths(buf: Uint8Array): LineStats {
+  const totalBytes = buf.length;
+  if (totalBytes === 0) {
+    return { lineCount: 0, maxLineLength: 0, avgLineLength: 0 };
+  }
+
+  let newlineCount = 0;
+  let maxLineLength = 0;
+  let currentLineLength = 0;
+
+  for (let i = 0; i < totalBytes; i++) {
+    if (buf[i] === 0x0a) {
+      newlineCount++;
+      if (currentLineLength > maxLineLength) maxLineLength = currentLineLength;
+      currentLineLength = 0;
+    } else {
+      currentLineLength++;
+    }
+  }
+  if (currentLineLength > maxLineLength) maxLineLength = currentLineLength;
+
+  const lineCount = newlineCount + 1;
+  const avgLineLength = Math.round(totalBytes / lineCount);
+  return { lineCount, maxLineLength, avgLineLength };
+}
+
+/**
+ * Detect minified/generated text that would block the event loop in tree-sitter
+ * or produce quadratic chunking work.
+ */
+export function isPathologicalText(buf: Uint8Array): PathologicalText {
+  const stats = analyzeLineLengths(buf);
+  if (buf.length === 0) {
+    return { pathological: false, reason: null, stats };
+  }
+
+  if (stats.maxLineLength > MAX_LINE_LENGTH) {
+    return {
+      pathological: true,
+      reason: `max line ${stats.maxLineLength}B > ${MAX_LINE_LENGTH}B`,
+      stats,
+    };
+  }
+  if (stats.avgLineLength > MAX_AVG_LINE_LENGTH) {
+    return {
+      pathological: true,
+      reason: `avg line ${stats.avgLineLength}B > ${MAX_AVG_LINE_LENGTH}B`,
+      stats,
+    };
+  }
+
+  return { pathological: false, reason: null, stats };
 }
 
 // ---------------------------------------------------------------------------
@@ -248,6 +340,7 @@ export async function walkDirectory(
 ): Promise<WalkResult> {
   const files: WalkedFile[] = [];
   let skippedExt = 0;
+  let skippedGenerated = 0;
 
   async function walk(currentPath: string): Promise<void> {
     let entries: string[];
@@ -276,6 +369,10 @@ export async function walkDirectory(
           await walk(fullPath);
         }
       } else if (stats.isFile()) {
+        if (isGeneratedArtifact(fullPath)) {
+          skippedGenerated++;
+          continue;
+        }
         if (isBinaryExtension(fullPath)) continue;
         const language = detectLanguage(fullPath);
         if (language === null) {
@@ -291,8 +388,12 @@ export async function walkDirectory(
   }
 
   await walk(dirPath);
-  log("info", "walker", `Walked ${dirPath}: ${files.length} files (${skippedExt} skipped — unsupported extension)`);
-  return { files, skippedExt };
+  log(
+    "info",
+    "walker",
+    `Walked ${dirPath}: ${files.length} files (${skippedExt} skipped — unsupported extension, ${skippedGenerated} skipped — generated artifact)`,
+  );
+  return { files, skippedExt, skippedGenerated };
 }
 
 /**
@@ -308,8 +409,15 @@ export async function resolveFiles(
   const stats = await stat(targetPath);
 
   if (stats.isFile()) {
+    if (isGeneratedArtifact(targetPath)) {
+      return { files: [], skippedExt: 0, skippedGenerated: 1 };
+    }
     const language = detectLanguage(targetPath);
-    return { files: [{ path: targetPath, language }], skippedExt: language === null ? 1 : 0 };
+    return {
+      files: [{ path: targetPath, language }],
+      skippedExt: language === null ? 1 : 0,
+      skippedGenerated: 0,
+    };
   }
 
   if (stats.isDirectory()) {

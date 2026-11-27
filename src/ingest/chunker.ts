@@ -13,6 +13,7 @@
 import { hashContent } from "../schema";
 import { sessionCache } from "../cache";
 import { extractSymbols, type ExtractedSymbol } from "./symbolExtractor";
+import { MAX_LINE_LENGTH } from "./loader";
 import { log } from "../logger";
 
 // ---------------------------------------------------------------------------
@@ -27,6 +28,18 @@ const TOKEN_OVERLAP = 77; // ~15 %
 // Tree-sitter parses synchronously in WASM — large files block the event loop.
 // Skip symbol extraction for files exceeding this threshold; use windowed chunking instead.
 const SYMBOL_EXTRACTION_MAX_CHARS = 200 * 1024; // 200 KB
+
+// ---------------------------------------------------------------------------
+// Errors
+// ---------------------------------------------------------------------------
+
+/** Thrown when a file exceeds its per-file CPU time budget. */
+export class FileBudgetExceededError extends Error {
+  constructor(filePath: string, budgetMsHint?: string) {
+    super(`File time budget exceeded: ${filePath}${budgetMsHint ? ` (${budgetMsHint})` : ""}`);
+    this.name = "FileBudgetExceededError";
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Token estimation
@@ -48,6 +61,8 @@ export interface ChunkInput {
   filePath: string;
   language: string | null;
   totalLines: number;
+  /** Epoch ms. When exceeded, chunking aborts with FileBudgetExceededError. */
+  deadline?: number;
 }
 
 export interface Chunk {
@@ -124,6 +139,18 @@ class LineIndex {
       else hi = mid - 1;
     }
     return lo + 1; // 1-indexed
+  }
+}
+
+/** True if any "\n"-delimited segment is longer than `max` chars (no array alloc). */
+function hasLongLine(text: string, max: number): boolean {
+  let start = 0;
+  while (true) {
+    const nl = text.indexOf("\n", start);
+    const end = nl === -1 ? text.length : nl;
+    if (end - start > max) return true;
+    if (nl === -1) return false;
+    start = nl + 1;
   }
 }
 
@@ -229,6 +256,8 @@ async function windowChunks(
   documentId: string,
   fileId: string,
   startChunkIndex: number,
+  filePath: string,
+  deadline?: number,
   symbolName?: string,
   baseLine = 1,
   qualifiedSym?: string,
@@ -246,6 +275,10 @@ async function windowChunks(
   let chunkCount = 0;
 
   for (let offset = 0; offset < len; offset += step) {
+    if (deadline !== undefined && Date.now() > deadline) {
+      throw new FileBudgetExceededError(filePath);
+    }
+
     const end = Math.min(offset + windowChars, len);
     const chunkText = subContent.slice(offset, end);
     const h = hashContentCached(chunkText);
@@ -266,7 +299,7 @@ async function windowChunks(
     });
 
     chunkCount++;
-    if (chunkCount % 50 === 0) {
+    if (chunkCount % 25 === 0) {
       await new Promise(r => setTimeout(r, 0));
     }
 
@@ -296,6 +329,8 @@ async function chunkBySymbols(
   documentId: string,
   fileId: string,
   totalTokenCount: number,
+  filePath: string,
+  deadline?: number,
 ): Promise<Chunk[]> {
   const sorted = [...symbols].sort(
     (a, b) => a.startLine - b.startLine || a.endLine - b.endLine,
@@ -303,8 +338,12 @@ async function chunkBySymbols(
 
   const chunks: Chunk[] = [];
   const lines = content.split("\n");
+  let symbolCount = 0;
 
   for (const sym of sorted) {
+    if (deadline !== undefined && Date.now() > deadline) {
+      throw new FileBudgetExceededError(filePath);
+    }
     const symContent = lines.slice(sym.startLine - 1, sym.endLine).join("\n");
     const symTokens = estimateTokens(symContent);
     const h = hashContentCached(symContent);
@@ -331,12 +370,19 @@ async function chunkBySymbols(
         documentId,
         fileId,
         chunks.length,
+        filePath,
+        deadline,
         sym.name,
         sym.startLine,
         sym.symbol ?? sym.name,
         sym.kind,
       );
       chunks.push(...windows);
+    }
+
+    symbolCount++;
+    if (symbolCount % 50 === 0) {
+      await new Promise((r) => setTimeout(r, 0));
     }
   }
 
@@ -372,6 +418,8 @@ async function fallbackChunk(
   documentId: string,
   fileId: string,
   totalTokenCount: number,
+  filePath: string,
+  deadline?: number,
 ): Promise<Chunk[]> {
   // Content shorter than the window → single document chunk
   if (totalTokenCount <= TOKEN_WINDOW) {
@@ -395,7 +443,7 @@ async function fallbackChunk(
   }
 
   // Sliding-window fallback
-  return await windowChunks(content, documentId, fileId, 0);
+  return await windowChunks(content, documentId, fileId, 0, filePath, deadline);
 }
 
 // ---------------------------------------------------------------------------
@@ -415,6 +463,9 @@ export async function chunkContent(input: ChunkInput): Promise<ChunkResult> {
   if (!input.content || input.content.length === 0) return { chunks: [], binarySkipped: 0 };
 
   const { content, documentId, fileId, filePath, language, totalLines } = input;
+  if (input.deadline !== undefined && Date.now() > input.deadline) {
+    throw new FileBudgetExceededError(filePath);
+  }
   const totalTokenCount = estimateTokens(content);
 
   let chunks: Chunk[];
@@ -452,6 +503,10 @@ export async function chunkContent(input: ChunkInput): Promise<ChunkResult> {
           tokenCount: totalTokenCount,
         },
       ];
+    } else if (hasLongLine(content, MAX_LINE_LENGTH)) {
+      // Defense-in-depth: minified/single-line content must never reach tree-sitter.
+      log("info", "chunker", `Skipping symbol extraction (long line): ${filePath}`);
+      chunks = await fallbackChunk(content, documentId, fileId, totalTokenCount, filePath, input.deadline);
     } else {
       // Code files: try symbol extraction (only for files small enough that
       // synchronous WASM parsing won't block the event loop for too long).
@@ -467,22 +522,22 @@ export async function chunkContent(input: ChunkInput): Promise<ChunkResult> {
         // Skip tree-sitter for large files — sync WASM parse blocks the event loop
         if (content.length > SYMBOL_EXTRACTION_MAX_CHARS) {
           log("info", "chunker", `Skipping symbol extraction for large file (${(content.length / 1024).toFixed(0)}KB): ${filePath}`);
-          chunks = await fallbackChunk(content, documentId, fileId, totalTokenCount);
+          chunks = await fallbackChunk(content, documentId, fileId, totalTokenCount, filePath, input.deadline);
         } else {
           try {
             const symbols = await extractSymbols(content, filePath);
             if (symbols.length > 0) {
-              chunks = await chunkBySymbols(content, symbols, documentId, fileId, totalTokenCount);
+              chunks = await chunkBySymbols(content, symbols, documentId, fileId, totalTokenCount, filePath, input.deadline);
             } else {
-              chunks = await fallbackChunk(content, documentId, fileId, totalTokenCount);
+              chunks = await fallbackChunk(content, documentId, fileId, totalTokenCount, filePath, input.deadline);
             }
           } catch {
-            chunks = await fallbackChunk(content, documentId, fileId, totalTokenCount);
+            chunks = await fallbackChunk(content, documentId, fileId, totalTokenCount, filePath, input.deadline);
           }
         }
       } else {
         // Large files or non-symbol languages: sliding windows
-        chunks = await fallbackChunk(content, documentId, fileId, totalTokenCount);
+        chunks = await fallbackChunk(content, documentId, fileId, totalTokenCount, filePath, input.deadline);
       }
     }
   }
