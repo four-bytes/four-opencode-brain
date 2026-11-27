@@ -1,9 +1,9 @@
 import { Database } from "bun:sqlite";
 import { mkdirSync, statSync } from "fs";
-import { homedir } from "os";
 import { join, dirname } from "path";
 import { log } from "./logger";
 import { loadVec0 } from "./embed/extensionLoader";
+import { getConfig } from "./config";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -146,9 +146,14 @@ export function hashBuffer(buf: Uint8Array): string {
 // ---------------------------------------------------------------------------
 // Open (or create) brain.db at the given path, enable WAL + FK pragmas
 // ---------------------------------------------------------------------------
+/** Resolve the default brain DB path from config (honours BRAIN_HOME). */
+export function resolveDatabasePath(dbPath?: string): string {
+  if (dbPath) return dbPath;
+  return join(getConfig().home, "brain.db");
+}
+
 export function openDatabase(dbPath?: string): Database {
-  const resolvedPath =
-    dbPath ?? join(homedir(), ".local", "share", "four-opencode-brain", "brain.db");
+  const resolvedPath = resolveDatabasePath(dbPath);
 
   mkdirSync(dirname(resolvedPath), { recursive: true });
 

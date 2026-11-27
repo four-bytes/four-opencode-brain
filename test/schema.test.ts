@@ -3,7 +3,8 @@ import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, rmSync } from "fs";
 import { join } from "path";
 
-import { openDatabase, createSchema, generateId, hashContent, initBrainDatabase, SCHEMA_VERSION, runMigrations, runIntegrityChecks, dbStats } from "../src/schema";
+import { openDatabase, createSchema, generateId, hashContent, initBrainDatabase, SCHEMA_VERSION, runMigrations, runIntegrityChecks, dbStats, resolveDatabasePath } from "../src/schema";
+import { resetConfig } from "../src/config";
 
 // ---------------------------------------------------------------------------
 // Test suite — unified brain.db schema
@@ -69,6 +70,78 @@ describe("openDatabase", () => {
       .query<{ foreign_keys: number }, []>("PRAGMA foreign_keys")
       .get()!;
     expect(row.foreign_keys).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BRAIN_HOME
+// ---------------------------------------------------------------------------
+
+describe("BRAIN_HOME", () => {
+  test("resolveDatabasePath() returns <BRAIN_HOME>/brain.db when BRAIN_HOME is set", () => {
+    const prev = process.env.BRAIN_HOME;
+    const home = join(TEST_DIR, "brain-home-resolve");
+    process.env.BRAIN_HOME = home;
+    resetConfig();
+    try {
+      expect(resolveDatabasePath()).toBe(join(home, "brain.db"));
+    } finally {
+      if (prev === undefined) delete process.env.BRAIN_HOME;
+      else process.env.BRAIN_HOME = prev;
+      resetConfig();
+    }
+  });
+
+  test("resolveDatabasePath(explicit) returns the explicit path even with BRAIN_HOME set", () => {
+    const prev = process.env.BRAIN_HOME;
+    process.env.BRAIN_HOME = join(TEST_DIR, "brain-home-explicit");
+    resetConfig();
+    try {
+      expect(resolveDatabasePath("/explicit/x.db")).toBe("/explicit/x.db");
+    } finally {
+      if (prev === undefined) delete process.env.BRAIN_HOME;
+      else process.env.BRAIN_HOME = prev;
+      resetConfig();
+    }
+  });
+
+  test("openDatabase() with no argument creates the DB under BRAIN_HOME", () => {
+    const prev = process.env.BRAIN_HOME;
+    const dir = join(TEST_DIR, "brain-home-open-" + Date.now());
+    process.env.BRAIN_HOME = dir;
+    resetConfig();
+    try {
+      const handle = openDatabase();
+      handle.close();
+      expect(existsSync(join(dir, "brain.db"))).toBe(true);
+    } finally {
+      if (prev === undefined) delete process.env.BRAIN_HOME;
+      else process.env.BRAIN_HOME = prev;
+      resetConfig();
+    }
+  });
+
+  test("initBrainDatabase() with no argument creates the DB and schema under BRAIN_HOME", () => {
+    const prev = process.env.BRAIN_HOME;
+    const dir = join(TEST_DIR, "brain-home-init-" + Date.now());
+    process.env.BRAIN_HOME = dir;
+    resetConfig();
+    try {
+      const handle = initBrainDatabase();
+      try {
+        expect(existsSync(join(dir, "brain.db"))).toBe(true);
+        const row = handle
+          .query<{ c: number }, []>("SELECT COUNT(*) AS c FROM sqlite_master")
+          .get()!;
+        expect(row.c).toBeGreaterThan(0);
+      } finally {
+        handle.close();
+      }
+    } finally {
+      if (prev === undefined) delete process.env.BRAIN_HOME;
+      else process.env.BRAIN_HOME = prev;
+      resetConfig();
+    }
   });
 });
 
