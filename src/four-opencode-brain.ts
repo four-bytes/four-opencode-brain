@@ -140,15 +140,18 @@ const _serverPlugin = async (input: PluginInput) => {
       );
       if (result.filesFound === 0) {
         const dirname = directory!.split("/").filter(Boolean).pop() ?? directory!;
-        const msg = `🧠 Found 0 files in ${dirname} — check path`;
+        const msg = result.minifiedSkipped > 0
+          ? `🧠 Found 0 indexable files in ${dirname} (${result.minifiedSkipped} generated/minified skipped)`
+          : `🧠 Found 0 files in ${dirname} — check path`;
         updateStatus("warning", { text: msg.replace("🧠 ", ""), toast: msg.replace("🧠 ", "") });
         toast(msg.replace("🧠 ", ""), "warning", "Brain 🧠");
-        log("warn", "auto-ingest", msg, { filesFound: result.filesFound, filesSkipped: result.filesSkipped, filesIndexed: result.filesIndexed, errors: result.errors.length, durationMs: result.durationMs, directory });
+        log("warn", "auto-ingest", msg, { filesFound: result.filesFound, filesSkipped: result.filesSkipped, filesIndexed: result.filesIndexed, minifiedSkipped: result.minifiedSkipped, errors: result.errors.length, durationMs: result.durationMs, directory });
       } else {
-        const msg = `🧠 Indexed ${result.filesIndexed} new, ${result.filesSkipped} skipped in ${(result.durationMs / 1000).toFixed(1)}s`;
+        const generated = result.minifiedSkipped > 0 ? `, ${result.minifiedSkipped} generated skipped` : "";
+        const msg = `🧠 Indexed ${result.filesIndexed} new, ${result.filesSkipped} skipped${generated} in ${(result.durationMs / 1000).toFixed(1)}s`;
         updateStatus("success", { text: msg.replace("🧠 ", ""), toast: msg.replace("🧠 ", "") });
         toast(msg.replace("🧠 ", ""), "success", "Brain 🧠");
-        log("info", "auto-ingest", msg, { filesFound: result.filesFound, filesIndexed: result.filesIndexed, filesSkipped: result.filesSkipped, errors: result.errors.length, durationMs: result.durationMs, directory });
+        log("info", "auto-ingest", msg, { filesFound: result.filesFound, filesIndexed: result.filesIndexed, filesSkipped: result.filesSkipped, minifiedSkipped: result.minifiedSkipped, errors: result.errors.length, durationMs: result.durationMs, directory });
       }
     } catch (err) {
       if (err instanceof TimeoutError) {
@@ -267,12 +270,14 @@ const _serverPlugin = async (input: PluginInput) => {
           timeoutMs,
           `ingestPath(${resolvedPath})`,
         );
-        const msg = `🧠 Indexed ${result.filesIndexed} new, ${result.filesSkipped} skipped in ${(result.durationMs / 1000).toFixed(1)}s`;
+        const generated = result.minifiedSkipped > 0 ? `, ${result.minifiedSkipped} generated skipped` : "";
+        const msg = `🧠 Indexed ${result.filesIndexed} new, ${result.filesSkipped} skipped${generated} in ${(result.durationMs / 1000).toFixed(1)}s`;
         toolCtx.metadata({
           title: msg,
           metadata: {
             filesIndexed: result.filesIndexed,
             filesSkipped: result.filesSkipped,
+            minifiedSkipped: result.minifiedSkipped,
             durationMs: result.durationMs,
           },
         });

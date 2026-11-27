@@ -35,8 +35,8 @@ const SYMBOL_EXTRACTION_MAX_CHARS = 200 * 1024; // 200 KB
 
 /** Thrown when a file exceeds its per-file CPU time budget. */
 export class FileBudgetExceededError extends Error {
-  constructor(filePath: string, budgetMsHint?: string) {
-    super(`File time budget exceeded: ${filePath}${budgetMsHint ? ` (${budgetMsHint})` : ""}`);
+  constructor(filePath: string) {
+    super(`File time budget exceeded: ${filePath}`);
     this.name = "FileBudgetExceededError";
   }
 }

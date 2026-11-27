@@ -164,7 +164,6 @@ export interface WalkResult {
 // ---------------------------------------------------------------------------
 
 const GENERATED_ARTIFACT_PATTERNS: RegExp[] = [
-  /\.min\.(?:js|mjs|cjs|css)$/i,
   /[-.]min\.(?:js|mjs|cjs|css)$/i,
   /\.bundle\.js$/i,
   /\.(?:js|css)\.map$/i,
