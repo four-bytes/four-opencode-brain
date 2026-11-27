@@ -21,8 +21,8 @@ import type { Database } from "bun:sqlite";
 import { generateId, hashBuffer, hashContent, checkpointDatabase } from "../schema";
 import { log } from "../logger";
 import { ingestMutex } from "./mutex";
-import { resolveFiles, isBinaryContent, type WalkResult, type WalkedFile } from "./loader";
-import { chunkContent, type ChunkResult, type Chunk } from "./chunker";
+import { resolveFiles, isBinaryContent, isPathologicalText, type WalkResult, type WalkedFile } from "./loader";
+import { chunkContent, FileBudgetExceededError, type ChunkResult, type Chunk } from "./chunker";
 import { extractSymbols } from "./symbolExtractor";
 import { embedChunks } from "./embed";
 import { loadVec0 } from "../embed/extensionLoader";
@@ -41,6 +41,7 @@ export interface IngestResult {
   chunksEmbedded: number; // chunks successfully embedded into vec0
   documentsCreated: number;
   binarySkipped: number; // files/chunks skipped due to binary content detection
+  minifiedSkipped: number; // minified/long-line/generated files skipped
   errors: string[];
   durationMs: number;
 }
@@ -68,6 +69,15 @@ export interface IngestOptions {
 
 /** Maximum file size for ingestion (2 MB). Files larger than this are skipped. */
 const MAX_FILE_SIZE = 2 * 1024 * 1024; // 2 MB
+
+/** Per-file CPU budget (2 s). Files exceeding it are skipped with a warning. */
+const FILE_TIME_BUDGET_MS = (() => {
+  const raw = process.env.BRAIN_FILE_TIME_BUDGET_MS;
+  if (!raw) return 2_000;
+  const n = Number(raw);
+  const ms = Number.isFinite(n) && n > 0 ? Math.floor(n) : 2_000;
+  return Math.max(1, ms);
+})();
 
 /** Per-file processing timeout (30 seconds). */
 const FILE_TIMEOUT_MS = 30_000; // 30 seconds per file
@@ -111,12 +121,14 @@ export async function ingestPath(
     const result: IngestResult = {
       filesFound: 0,
       filesSkipped: 0,
+      filesProcessed: 0,
       filesIndexed: 0,
       unsupported: 0,
       chunksCreated: 0,
       chunksEmbedded: 0,
       documentsCreated: 0,
       binarySkipped: 0,
+      minifiedSkipped: 0,
       errors: [],
       durationMs: 0,
     };
@@ -150,6 +162,7 @@ export async function ingestPath(
     result.filesFound = walkedFiles.length;
     result.filesProcessed = 0;
     result.unsupported = walkResult.skippedExt;
+    result.minifiedSkipped = walkResult.skippedGenerated;
 
     emitProgressEvent("ingest.start", {
       totalFiles: walkedFiles.length,
@@ -201,6 +214,9 @@ export async function ingestPath(
 
         result.filesProcessed++;
 
+        // Log per-file progress with a stable per-file key so a hang is attributable
+        log("info", `ingest.file.${filePath}`, `Ingesting ${filePath}`, { path: filePath, size: fileStats.size });
+
         // Update counter immediately for every file (BEFORE MAX_FILE_SIZE gate — skipped files still advance the counter)
         options?.progressCallback?.({ current: result.filesProcessed, total: walkedFiles.length });
 
@@ -231,6 +247,16 @@ export async function ingestPath(
           if (isBinaryContent(new Uint8Array(buf))) {
             log("info", "ingest", `Skipped (binary content): ${filePath}`);
             result.binarySkipped++;
+            return;
+          }
+
+          // Minified/long-line guard: never hand pathological text to tree-sitter/chunker
+          const patho = isPathologicalText(new Uint8Array(buf));
+          if (patho.pathological) {
+            const msg = `Skipped (minified/long lines, ${patho.reason}): ${filePath}`;
+            log("warn", "ingest.minified", msg, { path: filePath, size: buf.byteLength, ...patho.stats });
+            result.minifiedSkipped++;
+            result.errors.push(msg);
             return;
           }
 
@@ -327,10 +353,25 @@ export async function ingestPath(
               filePath,
               language,
               totalLines,
+              deadline: fileStart + FILE_TIME_BUDGET_MS,
             });
             chunks = chunkResult.chunks;
             result.binarySkipped += chunkResult.binarySkipped;
           } catch (err) {
+            if (err instanceof FileBudgetExceededError) {
+              db.exec(`ROLLBACK TO SAVEPOINT ${spFile}`);
+              db.exec(`RELEASE SAVEPOINT ${spFile}`);
+              result.documentsCreated = docCountBefore;
+              result.chunksCreated = chunkCountBefore;
+              log(
+                "warn",
+                "ingest.budget",
+                `File exceeded ${FILE_TIME_BUDGET_MS}ms budget — skipped: ${filePath}`,
+                { path: filePath, budgetMs: FILE_TIME_BUDGET_MS },
+              );
+              result.errors.push(`Time budget exceeded (${FILE_TIME_BUDGET_MS}ms): ${filePath}`);
+              return;
+            }
             db.exec(`ROLLBACK TO SAVEPOINT ${spFile}`);
             result.errors.push(`Failed to chunk ${filePath}: ${String(err)}`);
             return;
@@ -346,6 +387,7 @@ export async function ingestPath(
           // Clean up old chunks for this file before inserting new ones
           db.run("DELETE FROM chunks WHERE file_id = ?", [fileId]);
           const newChunkIds: string[] = [];
+          let chunkInsertCount = 0;
           for (const chunk of chunks) {
             try {
               db.run(
@@ -379,6 +421,10 @@ export async function ingestPath(
               fileFailed = true;
               break;
             }
+            chunkInsertCount++;
+            if (chunkInsertCount % 100 === 0) {
+              await new Promise((r) => setTimeout(r, 0));
+            }
           }
 
           if (fileFailed) {
@@ -402,6 +448,7 @@ export async function ingestPath(
           }
 
           // ── 11. Populate symbols table (global symbol store) ─────────────
+          let symbolInsertCount = 0;
           for (const chunk of chunks) {
             if (chunk.symbol) {
               try {
@@ -422,6 +469,10 @@ export async function ingestPath(
               } catch {
                 // Silently skip symbol insertion failures
               }
+            }
+            symbolInsertCount++;
+            if (symbolInsertCount % 100 === 0) {
+              await new Promise((r) => setTimeout(r, 0));
             }
           }
 

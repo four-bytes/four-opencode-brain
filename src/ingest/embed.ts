@@ -174,18 +174,28 @@ export async function embedChunks(db: Database, chunkIds: string[]): Promise<num
       } catch (err) {
         log("warn", "embed", `Batch embedding failed, falling back to per-chunk pseudo-embeddings: ${String(err)}`);
         // Fallback: generate pseudo-embeddings individually
+        let fallbackCount = 0;
         for (const chunk of toEmbed) {
           const vec = generateEmbedding(chunk.content);
           chunk.vec = vec;
           sessionCache.embeddings.set(chunk.contentHash, vec);
+          fallbackCount++;
+          if (fallbackCount % 100 === 0) {
+            await new Promise((r) => setTimeout(r, 0));
+          }
         }
       }
     } else {
       // Generate pseudo-embeddings for each
+      let pseudoCount = 0;
       for (const chunk of toEmbed) {
         const vec = generateEmbedding(chunk.content);
         chunk.vec = vec;
         sessionCache.embeddings.set(chunk.contentHash, vec);
+        pseudoCount++;
+        if (pseudoCount % 100 === 0) {
+          await new Promise((r) => setTimeout(r, 0));
+        }
       }
     }
   }
@@ -197,6 +207,7 @@ export async function embedChunks(db: Database, chunkIds: string[]): Promise<num
   );
 
   const allChunks = [...preCached, ...toEmbed];
+  let insertCount = 0;
   for (const chunk of allChunks) {
     try {
       if (chunk.vec) {
@@ -205,6 +216,10 @@ export async function embedChunks(db: Database, chunkIds: string[]): Promise<num
       }
     } catch (err) {
       log("warn", "embed-chunk", `Failed to insert embedding for chunk ${chunk.chunkId}: ${String(err)}`);
+    }
+    insertCount++;
+    if (insertCount % 100 === 0) {
+      await new Promise((r) => setTimeout(r, 0));
     }
   }
 

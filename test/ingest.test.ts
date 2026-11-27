@@ -8,8 +8,13 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { openDatabase, createSchema } from "../src/schema";
 import { ingestPath } from "../src/ingest";
-import { isBinaryContent } from "../src/ingest/loader";
-import { isBinaryChunk } from "../src/ingest/chunker";
+import {
+  isBinaryContent,
+  isGeneratedArtifact,
+  isPathologicalText,
+  MAX_LINE_LENGTH,
+} from "../src/ingest/loader";
+import { isBinaryChunk, chunkContent, FileBudgetExceededError } from "../src/ingest/chunker";
 import { sessionCache } from "../src/cache";
 import { brainSearch } from "../src/search/unified";
 
@@ -924,5 +929,117 @@ describe("isBinaryChunk (per-chunk validation)", () => {
 
   test("chunk with null byte at start", () => {
     expect(isBinaryChunk("\u0000hello")).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #236: generated-artifact and minified/long-line hardening
+// ---------------------------------------------------------------------------
+
+describe("loader — generated artifact filter", () => {
+  test("flags minified/bundled JS/CSS and source maps", () => {
+    for (const p of ["x.min.js", "x.min.css", "x.bundle.js", "x.js.map"]) {
+      expect(isGeneratedArtifact(p)).toBe(true);
+    }
+  });
+
+  test("does not flag normal source files", () => {
+    for (const p of ["x.js", "x.ts", "minified.ts", "x.css"]) {
+      expect(isGeneratedArtifact(p)).toBe(false);
+    }
+  });
+});
+
+describe("isPathologicalText", () => {
+  test("single 1.5 MB printable single-line JS buffer is pathological", () => {
+    const unit = "var a=1;function f(){return a};";
+    const target = 1.5 * 1024 * 1024;
+    const payload = unit.repeat(Math.ceil(target / unit.length)).slice(0, Math.floor(target));
+    const buf = new TextEncoder().encode(payload);
+
+    const result = isPathologicalText(buf);
+    expect(result.pathological).toBe(true);
+    expect(result.reason).toContain("max line");
+  });
+
+  test("a line just over MAX_LINE_LENGTH is pathological", () => {
+    const buf = new TextEncoder().encode("a".repeat(MAX_LINE_LENGTH + 1));
+    const result = isPathologicalText(buf);
+    expect(result.pathological).toBe(true);
+    expect(result.reason).toBe(`max line ${MAX_LINE_LENGTH + 1}B > ${MAX_LINE_LENGTH}B`);
+  });
+
+  test("normal multi-line source is not pathological", () => {
+    const buf = new TextEncoder().encode("function a() {\n  return 1;\n}\n");
+    const result = isPathologicalText(buf);
+    expect(result.pathological).toBe(false);
+    expect(result.reason).toBeNull();
+  });
+
+  test("empty buffer is not pathological", () => {
+    const result = isPathologicalText(new Uint8Array(0));
+    expect(result.pathological).toBe(false);
+    expect(result.stats.lineCount).toBe(0);
+    expect(result.stats.maxLineLength).toBe(0);
+    expect(result.stats.avgLineLength).toBe(0);
+  });
+});
+
+describe("ingestPath — minified/long-line hardening", () => {
+  test("skips generated artefacts in a directory", async () => {
+    const dir = join(TEST_DIR, "generated-artifacts");
+    if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
+    mkdirSync(dir, { recursive: true });
+
+    writeFileSync(join(dir, "app.min.js"), "var a=1;\n", "utf-8");
+    writeFileSync(join(dir, "styles.min.css"), "body{color:red}\n", "utf-8");
+    writeFileSync(join(dir, "vendor.bundle.js"), "var b=2;\n", "utf-8");
+    writeFileSync(join(dir, "app.js.map"), "{}\n", "utf-8");
+
+    const result = await ingestPath(db, dir);
+    expect(result.filesFound).toBe(0);
+    expect(result.minifiedSkipped).toBe(4);
+    expect(result.filesIndexed).toBe(0);
+  });
+
+  test("skips pathological single-line content but indexes normal files", async () => {
+    const dir = join(TEST_DIR, "pathological-content");
+    if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
+    mkdirSync(dir, { recursive: true });
+
+    writeFileSync(join(dir, "ok.ts"), "export const ok = 1;\n", "utf-8");
+
+    const unit = "var a=1;function f(){return a};";
+    const target = 1.5 * 1024 * 1024;
+    const payload = unit.repeat(Math.ceil(target / unit.length)).slice(0, Math.floor(target));
+    const payloadPath = join(dir, "generated-payload.js");
+    writeFileSync(payloadPath, payload, "utf-8");
+
+    const result = await ingestPath(db, dir);
+    expect(result.filesIndexed).toBe(1);
+    expect(result.minifiedSkipped).toBe(1);
+    expect(result.errors.some((e) => e.includes("minified/long lines"))).toBe(true);
+    expect(result.durationMs).toBeLessThan(5000);
+
+    const chunkCount = db
+      .query<{ c: number }, []>(
+        "SELECT COUNT(*) AS c FROM chunks WHERE document_id IN (SELECT id FROM documents WHERE path = ?)",
+      )
+      .get(payloadPath)!.c;
+    expect(chunkCount).toBe(0);
+  }, 15000);
+
+  test("chunker aborts when the deadline has passed", async () => {
+    await expect(
+      chunkContent({
+        documentId: "d",
+        fileId: "f",
+        content: "x".repeat(300 * 1024),
+        filePath: "budget.js",
+        language: "javascript",
+        totalLines: 1,
+        deadline: Date.now() - 1,
+      }),
+    ).rejects.toBeInstanceOf(FileBudgetExceededError);
   });
 });
