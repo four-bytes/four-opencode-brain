@@ -46,6 +46,8 @@ Expected output: `221 pass, 0 fail`
 |----------|---------|-------------|
 | `BRAIN_AUTO_INGEST` | `true` | Auto-index project on plugin startup. Set to `"false"` to disable. |
 | `BRAIN_DEBUG` | `false` | Enable debug-level logging. Set to `"true"` to enable. |
+| `BRAIN_HOME` | `~/.local/share/four-opencode-brain` | Database directory (brain.db lives here) |
+| `BRAIN_FILE_TIME_BUDGET_MS` | `2000` | Per-file ingest CPU budget (ms); over-budget files are skipped with a warning |
 
 ## Project Structure
 

@@ -80,6 +80,8 @@ After installation, the brain auto-ingests your project on startup (git repos on
 |---------|---------|-------------|
 | `BRAIN_AUTO_INGEST` | `true` | Auto-index on startup (git repos only) |
 | `BRAIN_DEBUG` | unset | Enable debug logging to stderr |
+| `BRAIN_HOME` | `~/.local/share/four-opencode-brain` | Database directory (brain.db lives here) |
+| `BRAIN_FILE_TIME_BUDGET_MS` | `2000` | Per-file ingest CPU budget (ms); over-budget files are skipped with a warning |
 
 ## Requirements
 
