@@ -7,7 +7,8 @@ import { Database } from "bun:sqlite";
 import { createSchema, generateId, hashContent } from "../src/schema";
 import { brainSearch } from "../src/search/unified";
 import plugin from "../src/four-opencode-brain";
-import { mkdtempSync } from "fs";
+import { resetConfig } from "../src/config";
+import { existsSync, mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
@@ -38,7 +39,11 @@ function tableExists(name: string): boolean {
 describe("brain_reindex — tool definition", () => {
   test("plugin exports brain_reindex tool", async () => {
     const originalHome = process.env.HOME;
-    process.env.HOME = mkdtempSync(join(tmpdir(), "brain-test-"));
+    const originalBrainHome = process.env.BRAIN_HOME;
+    const tempDir = mkdtempSync(join(tmpdir(), "brain-reindex-test-"));
+    process.env.HOME = tempDir;
+    process.env.BRAIN_HOME = tempDir;
+    resetConfig();
     try {
       const result = await plugin.server({
         client: {} as any,
@@ -51,8 +56,15 @@ describe("brain_reindex — tool definition", () => {
       expect(tool).toBeDefined();
       expect(tool.description).toContain("Rebuild vec0 vector index");
       expect(tool.args).toEqual({});
+      // Proves the temp DB was used, not the real user DB (see #246)
+      expect(existsSync(join(tempDir, "brain.db"))).toBe(true);
     } finally {
-      process.env.HOME = originalHome;
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+      if (originalBrainHome === undefined) delete process.env.BRAIN_HOME;
+      else process.env.BRAIN_HOME = originalBrainHome;
+      resetConfig();
+      rmSync(tempDir, { recursive: true, force: true });
     }
   }, 20000);
 });
