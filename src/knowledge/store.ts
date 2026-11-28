@@ -3,7 +3,7 @@
 // updates, automatic revision tracking, and occurrence history.
 // ---------------------------------------------------------------------------
 
-import { Database } from "bun:sqlite";
+import { Database, type SQLQueryBindings } from "bun:sqlite";
 import { generateId } from "../schema";
 
 // ---------------------------------------------------------------------------
@@ -143,24 +143,24 @@ export function kbGet(
   kind?: string,
 ): KbEntryFull | null {
   let sql = "SELECT * FROM knowledge_entries WHERE entry_key = ?";
-  const params: unknown[] = [entryKey];
+  const params: SQLQueryBindings[] = [entryKey];
   if (kind) {
     sql += " AND kind = ?";
     params.push(kind);
   }
   sql += " LIMIT 1";
 
-  const row = db.query<KbEntryRow, unknown[]>(sql).get(...params);
+  const row = db.query<KbEntryRow, SQLQueryBindings[]>(sql).get(...params);
   if (!row) return null;
 
   const occurrences = db
-    .query<KbOccurrence, unknown[]>(
+    .query<KbOccurrence, SQLQueryBindings[]>(
       "SELECT * FROM knowledge_occurrences WHERE entry_key = ? AND kind = ? ORDER BY occurred_at DESC",
     )
     .all(row.entry_key, row.kind);
 
   const revisions = db
-    .query<KbRevision, unknown[]>(
+    .query<KbRevision, SQLQueryBindings[]>(
       "SELECT * FROM knowledge_revisions WHERE entry_key = ? AND kind = ? ORDER BY created_at ASC",
     )
     .all(row.entry_key, row.kind);
@@ -185,7 +185,7 @@ export function kbAdd(db: Database, input: KbAddInput): KbAddResult {
 
   // Check for existing entry
   const existing = db
-    .query<KbEntryRow, unknown[]>(
+    .query<KbEntryRow, SQLQueryBindings[]>(
       "SELECT * FROM knowledge_entries WHERE entry_key = ? AND kind = ? LIMIT 1",
     )
     .get(entryKey, input.kind);
@@ -283,7 +283,7 @@ export function kbAdd(db: Database, input: KbAddInput): KbAddResult {
 export function kbRecord(db: Database, input: KbRecordInput): KbOccurrence {
   // Verify entry exists
   const existing = db
-    .query<KbEntryRow, unknown[]>(
+    .query<KbEntryRow, SQLQueryBindings[]>(
       "SELECT entry_key, kind FROM knowledge_entries WHERE entry_key = ? AND kind = ? LIMIT 1",
     )
     .get(input.entry_key, input.kind);
@@ -316,7 +316,7 @@ export function kbRecord(db: Database, input: KbRecordInput): KbOccurrence {
   );
 
   const row = db
-    .query<KbOccurrence, unknown[]>(
+    .query<KbOccurrence, SQLQueryBindings[]>(
       "SELECT * FROM knowledge_occurrences WHERE id = ?",
     )
     .get(id);
@@ -324,7 +324,7 @@ export function kbRecord(db: Database, input: KbRecordInput): KbOccurrence {
   // ── E8.1: Confidence Auto-Bump ──────────────────────────────────────────
   if (input.outcome === "fixed") {
     const current = db
-      .query<KbEntryRow, unknown[]>(
+      .query<KbEntryRow, SQLQueryBindings[]>(
         "SELECT * FROM knowledge_entries WHERE entry_key = ? AND kind = ? LIMIT 1",
       )
       .get(input.entry_key, input.kind);
@@ -332,7 +332,7 @@ export function kbRecord(db: Database, input: KbRecordInput): KbOccurrence {
     if (current) {
       // Count fixed outcomes
       const fixedCount = db
-        .query<{ c: number }, unknown[]>(
+        .query<{ c: number }, SQLQueryBindings[]>(
           "SELECT COUNT(*) AS c FROM knowledge_occurrences WHERE entry_key = ? AND kind = ? AND outcome = 'fixed'",
         )
         .get(input.entry_key, input.kind)!;
@@ -440,7 +440,7 @@ export function kbReview(db: Database, input: KbReviewInput): KbEntryFull {
 
   // Get current entry
   const current = db
-    .query<KbEntryRow, unknown[]>(
+    .query<KbEntryRow, SQLQueryBindings[]>(
       "SELECT * FROM knowledge_entries WHERE entry_key = ? AND kind = ? LIMIT 1",
     )
     .get(input.entry_key, input.kind);
@@ -565,7 +565,7 @@ export function kbSearch(
     JOIN knowledge_entries k ON k.rowid = f.rowid
     WHERE entries_fts MATCH ?
   `;
-  const params: unknown[] = [options.query];
+  const params: SQLQueryBindings[] = [options.query];
 
   if (options.entity_type) {
     sql += " AND k.entity_type = ?";
@@ -596,7 +596,7 @@ export function kbSearch(
   }
 
   try {
-    return db.query<KbSearchResult, unknown[]>(sql).all(...params);
+    return db.query<KbSearchResult, SQLQueryBindings[]>(sql).all(...params);
   } catch {
     return [];
   }

@@ -147,7 +147,16 @@ export function startStatusServer(directory: string): void {
     return;
   }
   
-  _port = _server.port;
+  // bun-types 1.3.14 types Server.port as number | undefined (a Unix-socket
+  // listener has none). We always bind a TCP port, so a missing port means the
+  // server is unusable — stop it and leave the TUI on its fallback state.
+  const boundPort = _server.port;
+  if (boundPort === undefined) {
+    _server.stop();
+    _server = null;
+    return;
+  }
+  _port = boundPort;
   
   // Write port to session-scoped discovery file (session id when known, else directory)
   try {

@@ -3,7 +3,7 @@
 // with optional vec0 vector search and RRF fusion.
 // ---------------------------------------------------------------------------
 
-import { Database } from "bun:sqlite";
+import { Database, type SQLQueryBindings } from "bun:sqlite";
 import { sessionCache } from "../cache";
 import { hashContent } from "../schema";
 import { loadVec0 } from "../embed/extensionLoader";
@@ -130,7 +130,7 @@ function ftsSearchDocuments(
     JOIN documents d ON d.rowid = f.rowid
     WHERE documents_fts MATCH ?
   `;
-  const params: unknown[] = [query];
+  const params: SQLQueryBindings[] = [query];
 
   if (filters.language) {
     sql += " AND d.language = ?";
@@ -194,7 +194,7 @@ function ftsSearchMemories(
     JOIN memories m ON m.rowid = f.rowid
     WHERE memories_fts MATCH ?
   `;
-  const params: unknown[] = [query];
+  const params: SQLQueryBindings[] = [query];
 
   if (filters.project) {
     sql += " AND m.project_hash = ?";
@@ -243,7 +243,7 @@ function ftsSearchKnowledge(
     JOIN knowledge_entries k ON k.rowid = f.rowid
     WHERE entries_fts MATCH ?
   `;
-  const params: unknown[] = [query];
+  const params: SQLQueryBindings[] = [query];
 
   if (filters.entity_type) {
     sql += " AND k.entity_type = ?";
@@ -415,7 +415,7 @@ function searchChunksFallback(
       JOIN documents d ON d.id = c.document_id
       WHERE c.content LIKE ?
     `;
-    const params: unknown[] = [`%${query}%`];
+    const params: SQLQueryBindings[] = [`%${query}%`];
 
     if (filters.language) {
       sql += " AND d.language = ?";
@@ -542,7 +542,7 @@ function ftsSearchSymbols(
     JOIN symbols s ON s.rowid = f.rowid
     WHERE symbols_fts MATCH ?
   `;
-  const params: unknown[] = [query];
+  const params: SQLQueryBindings[] = [query];
 
   if (filters.project) {
     sql += " AND s.project_hash = ?";

@@ -4,7 +4,7 @@
 // defined in schema.ts.
 // ---------------------------------------------------------------------------
 
-import { Database } from "bun:sqlite";
+import { Database, type SQLQueryBindings } from "bun:sqlite";
 import { generateId, hashContent } from "../schema";
 
 // ---------------------------------------------------------------------------
@@ -136,7 +136,7 @@ export function memorySearch(db: Database, opts: SearchOpts): MemoryEntry[] {
     JOIN memories m ON m.rowid = f.rowid
     WHERE memories_fts MATCH ?
   `;
-  const params: unknown[] = [opts.query];
+  const params: SQLQueryBindings[] = [opts.query];
 
   if (opts.type) {
     sql += " AND m.type = ?";
@@ -182,7 +182,7 @@ export function memorySearch(db: Database, opts: SearchOpts): MemoryEntry[] {
 export function memoryList(db: Database, opts: ListOpts): MemoryEntry[] {
   let sql =
     "SELECT id, project_hash, date, type, tags, title, content, created_at FROM memories WHERE 1=1";
-  const params: unknown[] = [];
+  const params: SQLQueryBindings[] = [];
 
   if (opts.type) {
     sql += " AND type = ?";
