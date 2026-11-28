@@ -1,6 +1,6 @@
 {
   "name": "@four-bytes/four-opencode-brain",
-  "version": "1.8.18",
+  "version": "1.8.19",
   "description": "Unified brain plugin — single SQLite DB for RAG search, memory, and knowledge base",
   "license": "Apache-2.0",
   "type": "module",
@@ -16,7 +16,7 @@
     "four-bytes"
   ],
   "dependencies": {
-    "@four-bytes/opencode-plugin-lib": "github:four-bytes/four-opencode-plugin-lib#v0.8.9",
+    "@four-bytes/opencode-plugin-lib": "github:four-bytes/four-opencode-plugin-lib#v0.9.0",
     "@opencode-ai/plugin": "1.16.2",
     "@opentui/core": "0.4.5",
     "@opentui/solid": "0.4.5",
