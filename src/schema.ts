@@ -10,7 +10,7 @@ import { getConfig } from "./config";
 // ---------------------------------------------------------------------------
 
 /** Current schema version for migration tracking. */
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 // ---------------------------------------------------------------------------
 // Integrity checks — PRAGMA + orphan chunk auditing
@@ -245,6 +245,38 @@ function migrateV2toV3(db: Database): void {
     log("info", "schema", "Applied v2→v3 migration: project_hash on documents, symbols table");
   } catch (err) {
     log("error", "schema", `v2→v3 migration failed: ${String(err)}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Migration: v3 → v4 — dedup / FK lookup indexes
+// ---------------------------------------------------------------------------
+
+/**
+ * Add the indexes the content-hash dedup triggers and per-file chunk cleanup
+ * depend on. All statements are `CREATE INDEX IF NOT EXISTS`, so the migration
+ * is idempotent and safe to re-run (and harmless on a fresh database where
+ * createSchema() already created them).
+ */
+function migrateV3toV4(db: Database): void {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_chunks_content_hash ON chunks(content_hash);
+        CREATE INDEX IF NOT EXISTS idx_documents_path_content_hash ON documents(path, content_hash);
+        CREATE INDEX IF NOT EXISTS idx_chunks_file_id ON chunks(file_id);
+      `);
+      log("info", "schema", "Applied v3→v4 migration: dedup / FK lookup indexes");
+      return;
+    } catch (err) {
+      if (attempt < 2) {
+        log("warn", "schema", `v3→v4 migration attempt ${attempt + 1} failed (locked), retrying...`);
+        Bun.sleepSync(1000);
+      } else {
+        log("warn", "schema", `v3→v4 migration deferred (DB locked after 3 attempts): ${String(err)}`);
+        // Non-fatal — migration will retry on next initBrainDatabase()
+      }
+    }
   }
 }
 
@@ -616,6 +648,24 @@ export function createSchema(db: Database): void {
       );
     END
   `);
+
+  // ---- dedup / FK lookup indexes (v3 → v4) --------------------------------
+  //
+  // The BEFORE INSERT dedup triggers run a SELECT for every single insert.
+  // Without an index that SELECT is a full table scan, so ingesting N chunks
+  // costs O(N²) and monopolises the event loop. `chunks(file_id)` backs the
+  // per-file `DELETE FROM chunks WHERE file_id = ?` cleanup.
+  //
+  // `documents(path, content_hash)` duplicates the index SQLite already
+  // creates for the UNIQUE(path, content_hash) constraint (that autoindex is
+  // what the trigger currently uses). It is created explicitly so the dedup
+  // path keeps its index even if the UNIQUE constraint ever changes, and so
+  // the intent is visible in sqlite_master. Cost is one row per file.
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_chunks_content_hash ON chunks(content_hash);
+    CREATE INDEX IF NOT EXISTS idx_documents_path_content_hash ON documents(path, content_hash);
+    CREATE INDEX IF NOT EXISTS idx_chunks_file_id ON chunks(file_id);
+  `);
 }
 
 // ---------------------------------------------------------------------------
@@ -629,6 +679,8 @@ export function createSchema(db: Database): void {
  *
  * Migration history:
  *   v1 → v2: entity_type CHECK constraint via triggers
+ *   v3 → v4: dedup / FK lookup indexes (chunks.content_hash,
+ *            documents(path, content_hash), chunks.file_id)
  */
 export function runMigrations(db: Database): void {
   let currentVersion = 0;
@@ -661,6 +713,11 @@ export function runMigrations(db: Database): void {
   // v2 → v3: add project_hash to documents, create symbols table
   if (currentVersion < 3) {
     migrateV2toV3(db);
+  }
+
+  // v3 → v4: dedup / FK lookup indexes
+  if (currentVersion < 4) {
+    migrateV3toV4(db);
   }
 
   db.run("INSERT OR REPLACE INTO metadata (key, value) VALUES ('schema_version', ?)", [

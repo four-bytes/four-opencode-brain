@@ -69,38 +69,57 @@ export function generateEmbedding(text: string): Float32Array {
 }
 
 // ---------------------------------------------------------------------------
-// Batch embedding pipeline
+// Batch embedding pipeline — split into a compute phase and a write phase
+//
+// computeEmbeddings() is async and may yield; it MUST run outside any
+// transaction (Phase 1). insertEmbeddings() is fully synchronous and must be
+// called inside the tight per-file write transaction (Phase 2) — no await,
+// no yields, no event-loop turns while the SAVEPOINT is open.
 // ---------------------------------------------------------------------------
 
-/**
- * Embed all chunks with the given IDs into the chunks_vec table.
- *
- * Uses sessionCache.embeddings for hash-based dedup: if the same content hash
- * has already been embedded in this session, the cached vector is reused.
- *
- * Prefers real embeddings via EmbeddingService (node-llama-cpp).
- * Falls back to hash-based pseudo-embeddings when model unavailable.
- *
- * @param db       Open brain database handle
- * @param chunkIds Array of chunk UUIDs to embed
- * @returns        Number of chunks successfully embedded
- */
-export async function embedChunks(db: Database, chunkIds: string[]): Promise<number> {
-  if (chunkIds.length === 0) return 0;
+/** A chunk whose embedding should be computed. No DB row is required. */
+export interface EmbedSource {
+  chunkId: string;
+  content: string;
+  contentHash: string;
+}
 
-  // Guard: vec0 module must be loaded on this handle
+/** A computed embedding ready for insertion during the write phase. */
+export interface PreparedEmbedding {
+  chunkId: string;
+  vec: Float32Array;
+}
+
+/** True when vec0 is loaded on this handle and chunks_vec exists. */
+function vec0Ready(db: Database): boolean {
   if (!loadVec0(db)) {
     log("warn", "embed", "vec0 extension not loaded on this handle — skipping embedding");
-    return 0;
+    return false;
   }
 
-  // Verify the chunks_vec table exists before proceeding
   const tableExists = db
     .query<{ c: number }, []>(
       "SELECT COUNT(*) AS c FROM sqlite_master WHERE type='table' AND name='chunks_vec'",
     )
     .get()!;
-  if (tableExists.c === 0) return 0;
+  return tableExists.c > 0;
+}
+
+/**
+ * PHASE 1 — compute embeddings for the given chunks. Never writes to SQLite.
+ *
+ * Async because the real embedding model is async; safe to call outside a
+ * transaction. Uses sessionCache.embeddings for hash-based dedup: if the same
+ * content hash has already been embedded in this session, the cached vector
+ * is reused. Prefers real embeddings via EmbeddingService (node-llama-cpp)
+ * and falls back to hash-based pseudo-embeddings when the model is unavailable.
+ */
+export async function computeEmbeddings(
+  db: Database,
+  sources: EmbedSource[],
+): Promise<PreparedEmbedding[]> {
+  if (sources.length === 0) return [];
+  if (!vec0Ready(db)) return [];
 
   // ── Try to initialize real embedding model ────────────────────────────
   const embService = EmbeddingService.getInstance();
@@ -124,38 +143,15 @@ export async function embedChunks(db: Database, chunkIds: string[]): Promise<num
   }
 
   // ── Pre-scan: separate pre-cached from to-be-embedded ──────────────────
-  const getStmt = db.query<{ content: string; content_hash: string }, [string]>(
-    "SELECT content, content_hash FROM chunks WHERE id = ?",
-  );
+  const prepared: PreparedEmbedding[] = [];
+  const toEmbed: EmbedSource[] = [];
 
-  interface ChunkInfo {
-    chunkId: string;
-    content: string;
-    contentHash: string;
-    vec?: Float32Array;
-  }
-
-  const preCached: ChunkInfo[] = [];
-  const toEmbed: ChunkInfo[] = [];
-
-  for (const chunkId of chunkIds) {
-    try {
-      const row = getStmt.get(chunkId);
-      if (!row) continue;
-
-      const { content, content_hash } = row;
-      const info: ChunkInfo = { chunkId, content, contentHash: content_hash };
-
-      // Check session cache first
-      const cachedVec = sessionCache.embeddings.get(content_hash);
-      if (cachedVec) {
-        info.vec = cachedVec;
-        preCached.push(info);
-      } else {
-        toEmbed.push(info);
-      }
-    } catch (err) {
-      log("warn", "embed-chunk", `Failed to read chunk ${chunkId}: ${String(err)}`);
+  for (const src of sources) {
+    const cachedVec = sessionCache.embeddings.get(src.contentHash);
+    if (cachedVec) {
+      prepared.push({ chunkId: src.chunkId, vec: cachedVec });
+    } else {
+      toEmbed.push(src);
     }
   }
 
@@ -168,7 +164,8 @@ export async function embedChunks(db: Database, chunkIds: string[]): Promise<num
         const batchResults = await embService.embedBatch(texts);
         for (let i = 0; i < toEmbed.length; i++) {
           const vec = batchResults[i];
-          toEmbed[i].vec = vec;
+          if (!vec) continue;
+          prepared.push({ chunkId: toEmbed[i].chunkId, vec });
           sessionCache.embeddings.set(toEmbed[i].contentHash, vec);
         }
       } catch (err) {
@@ -177,7 +174,7 @@ export async function embedChunks(db: Database, chunkIds: string[]): Promise<num
         let fallbackCount = 0;
         for (const chunk of toEmbed) {
           const vec = generateEmbedding(chunk.content);
-          chunk.vec = vec;
+          prepared.push({ chunkId: chunk.chunkId, vec });
           sessionCache.embeddings.set(chunk.contentHash, vec);
           fallbackCount++;
           if (fallbackCount % 100 === 0) {
@@ -190,7 +187,7 @@ export async function embedChunks(db: Database, chunkIds: string[]): Promise<num
       let pseudoCount = 0;
       for (const chunk of toEmbed) {
         const vec = generateEmbedding(chunk.content);
-        chunk.vec = vec;
+        prepared.push({ chunkId: chunk.chunkId, vec });
         sessionCache.embeddings.set(chunk.contentHash, vec);
         pseudoCount++;
         if (pseudoCount % 100 === 0) {
@@ -200,28 +197,68 @@ export async function embedChunks(db: Database, chunkIds: string[]): Promise<num
     }
   }
 
-  // ── Insert ALL (pre-cached + freshly embedded) into chunks_vec ────────
-  let embedded = 0;
+  return prepared;
+}
+
+/**
+ * PHASE 2 — synchronous vec0 inserts. NO await, NO yields.
+ *
+ * Must be called inside the per-file write transaction so the SQLite write
+ * lock is held for one continuous block instead of across event-loop turns.
+ *
+ * @returns Number of chunks successfully embedded.
+ */
+export function insertEmbeddings(db: Database, prepared: PreparedEmbedding[]): number {
+  if (prepared.length === 0) return 0;
+
   const insertStmt = db.query<unknown, [string, Uint8Array]>(
     "INSERT OR IGNORE INTO chunks_vec (chunk_id, embedding) VALUES (?, ?)",
   );
 
-  const allChunks = [...preCached, ...toEmbed];
-  let insertCount = 0;
-  for (const chunk of allChunks) {
+  let embedded = 0;
+  for (const item of prepared) {
     try {
-      if (chunk.vec) {
-        insertStmt.run(chunk.chunkId, float32ToBlob(chunk.vec));
-        embedded++;
-      }
+      insertStmt.run(item.chunkId, float32ToBlob(item.vec));
+      embedded++;
     } catch (err) {
-      log("warn", "embed-chunk", `Failed to insert embedding for chunk ${chunk.chunkId}: ${String(err)}`);
-    }
-    insertCount++;
-    if (insertCount % 100 === 0) {
-      await new Promise((r) => setTimeout(r, 0));
+      log("warn", "embed-chunk", `Failed to insert embedding for chunk ${item.chunkId}: ${String(err)}`);
     }
   }
 
   return embedded;
+}
+
+/**
+ * Convenience wrapper: embed already-persisted chunks by ID.
+ *
+ * Reads chunk content from the DB, computes embeddings (Phase 1) and inserts
+ * them (Phase 2). Kept for callers such as the vector-index rebuild tool and
+ * the embed tests. The ingest pipeline uses computeEmbeddings + insertEmbeddings
+ * directly to keep the write transaction tight.
+ *
+ * @param db       Open brain database handle
+ * @param chunkIds Array of chunk UUIDs to embed
+ * @returns        Number of chunks successfully embedded
+ */
+export async function embedChunks(db: Database, chunkIds: string[]): Promise<number> {
+  if (chunkIds.length === 0) return 0;
+  if (!vec0Ready(db)) return 0;
+
+  const getStmt = db.query<{ content: string; content_hash: string }, [string]>(
+    "SELECT content, content_hash FROM chunks WHERE id = ?",
+  );
+
+  const sources: EmbedSource[] = [];
+  for (const chunkId of chunkIds) {
+    try {
+      const row = getStmt.get(chunkId);
+      if (!row) continue;
+      sources.push({ chunkId, content: row.content, contentHash: row.content_hash });
+    } catch (err) {
+      log("warn", "embed-chunk", `Failed to read chunk ${chunkId}: ${String(err)}`);
+    }
+  }
+
+  const prepared = await computeEmbeddings(db, sources);
+  return insertEmbeddings(db, prepared);
 }
