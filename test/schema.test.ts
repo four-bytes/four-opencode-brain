@@ -498,8 +498,8 @@ describe("metadata table", () => {
 // ---------------------------------------------------------------------------
 
 describe("schema version and migration (E6.1)", () => {
-  test("SCHEMA_VERSION is 3", () => {
-    expect(SCHEMA_VERSION).toBe(3);
+  test("SCHEMA_VERSION is 4", () => {
+    expect(SCHEMA_VERSION).toBe(4);
   });
 
   test("runMigrations sets schema_version in metadata", () => {
@@ -542,6 +542,78 @@ describe("schema version and migration (E6.1)", () => {
       expect(parseInt(row!.value, 10)).toBe(SCHEMA_VERSION);
     } finally {
       result.close();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// v3 → v4 migration: dedup / FK lookup indexes (#239)
+// ---------------------------------------------------------------------------
+
+describe("v3→v4 dedup indexes (#239)", () => {
+  const DEDUP_INDEXES = [
+    "idx_chunks_content_hash",
+    "idx_documents_path_content_hash",
+    "idx_chunks_file_id",
+  ] as const;
+
+  function indexExists(handle: Database, name: string): boolean {
+    const row = handle
+      .query<{ name: string }, [string]>(
+        "SELECT name FROM sqlite_master WHERE type='index' AND name = ?",
+      )
+      .get(name);
+    return row !== null;
+  }
+
+  function schemaVersion(handle: Database): number {
+    const row = handle
+      .query<{ value: string }, []>(
+        "SELECT value FROM metadata WHERE key = 'schema_version'",
+      )
+      .get();
+    return row ? parseInt(row.value, 10) : 0;
+  }
+
+  test("fresh database contains all dedup indexes after initBrainDatabase()", () => {
+    const freshPath = join(TEST_DIR, "v4-fresh.db");
+    const handle = initBrainDatabase(freshPath);
+    try {
+      for (const name of DEDUP_INDEXES) {
+        expect(indexExists(handle, name)).toBe(true);
+      }
+      expect(schemaVersion(handle)).toBe(4);
+    } finally {
+      handle.close();
+    }
+  });
+
+  test("upgrading a v3 database creates the indexes, re-run is a no-op", () => {
+    const upgradePath = join(TEST_DIR, "v4-upgrade.db");
+    const handle = initBrainDatabase(upgradePath);
+    try {
+      // Simulate an existing v3 database: drop the v4 indexes, mark version 3.
+      for (const name of DEDUP_INDEXES) {
+        handle.exec(`DROP INDEX IF EXISTS ${name}`);
+        expect(indexExists(handle, name)).toBe(false);
+      }
+      handle.run("UPDATE metadata SET value = '3' WHERE key = 'schema_version'");
+
+      runMigrations(handle);
+
+      for (const name of DEDUP_INDEXES) {
+        expect(indexExists(handle, name)).toBe(true);
+      }
+      expect(schemaVersion(handle)).toBe(4);
+
+      // Re-running the migration must not throw or change the result.
+      expect(() => runMigrations(handle)).not.toThrow();
+      for (const name of DEDUP_INDEXES) {
+        expect(indexExists(handle, name)).toBe(true);
+      }
+      expect(schemaVersion(handle)).toBe(4);
+    } finally {
+      handle.close();
     }
   });
 });

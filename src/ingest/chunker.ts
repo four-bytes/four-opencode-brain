@@ -29,6 +29,10 @@ const TOKEN_OVERLAP = 77; // ~15 %
 // Skip symbol extraction for files exceeding this threshold; use windowed chunking instead.
 const SYMBOL_EXTRACTION_MAX_CHARS = 200 * 1024; // 200 KB
 
+// A synchronous tree-sitter parse cannot be interrupted. If less than this much
+// per-file budget remains, do not start one — fall back to windowed chunking.
+const SYMBOL_PARSE_RESERVE_MS = 500;
+
 // ---------------------------------------------------------------------------
 // Errors
 // ---------------------------------------------------------------------------
@@ -519,9 +523,12 @@ export async function chunkContent(input: ChunkInput): Promise<ChunkResult> {
           language === "rust"
         )
       ) {
-        // Skip tree-sitter for large files — sync WASM parse blocks the event loop
-        if (content.length > SYMBOL_EXTRACTION_MAX_CHARS) {
-          log("info", "chunker", `Skipping symbol extraction for large file (${(content.length / 1024).toFixed(0)}KB): ${filePath}`);
+        // Pre-check remaining budget: a synchronous tree-sitter parse cannot
+        // be interrupted, so never start one when the deadline is nearly gone.
+        const budgetRemaining =
+          input.deadline === undefined ? Number.POSITIVE_INFINITY : input.deadline - Date.now();
+        if (budgetRemaining < SYMBOL_PARSE_RESERVE_MS) {
+          log("info", "chunker", `Skipping symbol extraction (budget nearly exhausted, ${Math.max(0, Math.round(budgetRemaining))}ms left): ${filePath}`);
           chunks = await fallbackChunk(content, documentId, fileId, totalTokenCount, filePath, input.deadline);
         } else {
           try {

@@ -24,8 +24,7 @@ import { ingestMutex } from "./mutex";
 import { resolveFiles, isBinaryContent, isPathologicalText, type WalkResult, type WalkedFile } from "./loader";
 import { chunkContent, FileBudgetExceededError, type ChunkResult, type Chunk } from "./chunker";
 import { extractSymbols } from "./symbolExtractor";
-import { embedChunks } from "./embed";
-import { loadVec0 } from "../embed/extensionLoader";
+import { computeEmbeddings, insertEmbeddings } from "./embed";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -70,14 +69,22 @@ export interface IngestOptions {
 /** Maximum file size for ingestion (2 MB). Files larger than this are skipped. */
 const MAX_FILE_SIZE = 2 * 1024 * 1024; // 2 MB
 
-/** Per-file CPU budget (2 s). Files exceeding it are skipped with a warning. */
-const FILE_TIME_BUDGET_MS = (() => {
+/** Default per-file CPU budget (2 s). Files exceeding it are skipped with a warning. */
+const DEFAULT_FILE_TIME_BUDGET_MS = 2_000;
+
+/**
+ * Resolve the per-file CPU budget from `BRAIN_FILE_TIME_BUDGET_MS`.
+ *
+ * Read at ingest start (not module load) so the value can be tuned per run
+ * and exercised by tests.
+ */
+function resolveFileTimeBudgetMs(): number {
   const raw = process.env.BRAIN_FILE_TIME_BUDGET_MS;
-  if (!raw) return 2_000;
+  if (!raw) return DEFAULT_FILE_TIME_BUDGET_MS;
   const n = Number(raw);
-  const ms = Number.isFinite(n) && n > 0 ? Math.floor(n) : 2_000;
+  const ms = Number.isFinite(n) && n > 0 ? Math.floor(n) : DEFAULT_FILE_TIME_BUDGET_MS;
   return Math.max(1, ms);
-})();
+}
 
 /** Per-file processing timeout (30 seconds). */
 const FILE_TIMEOUT_MS = 30_000; // 30 seconds per file
@@ -95,6 +102,54 @@ const SLOW_FILE_DISPLAY_MS = 3_000;
 function emitProgressEvent(event: string, data: Record<string, unknown>): void {
   if (process.env.BRAIN_DEBUG !== "true") return;
   log("debug", `ingest.${event}`, typeof data === "object" ? JSON.stringify(data).slice(0, 500) : String(data));
+}
+
+/**
+ * Roll back to a per-file savepoint and release it.
+ *
+ * `ROLLBACK TO` keeps the savepoint on the stack, so it must always be
+ * followed by `RELEASE` to avoid leaking savepoints across files.
+ */
+function rollbackSavepoint(db: Database, name: string): void {
+  try {
+    db.exec(`ROLLBACK TO SAVEPOINT ${name}`);
+  } catch { /* best-effort */ }
+  try {
+    db.exec(`RELEASE SAVEPOINT ${name}`);
+  } catch { /* best-effort */ }
+}
+
+/**
+ * Read the current `wal_autocheckpoint` threshold (pages).
+ * Falls back to SQLite's default (1000) if the pragma cannot be read.
+ */
+function readWalAutocheckpoint(db: Database): number {
+  try {
+    const row = db
+      .query<{ wal_autocheckpoint: number }, []>("PRAGMA wal_autocheckpoint")
+      .get();
+    return row?.wal_autocheckpoint ?? 1000;
+  } catch {
+    return 1000;
+  }
+}
+
+/** Set the `wal_autocheckpoint` threshold. Best-effort — never throws. */
+function setWalAutocheckpoint(db: Database, pages: number): void {
+  try {
+    db.exec(`PRAGMA wal_autocheckpoint=${Math.max(0, Math.floor(pages))}`);
+  } catch { /* best-effort */ }
+}
+
+/**
+ * Run a PASSIVE WAL checkpoint. Must only be called OUTSIDE a write
+ * transaction (never between SAVEPOINT and RELEASE), otherwise it fails or
+ * blocks. Best-effort — never throws.
+ */
+function checkpointWalPassive(db: Database): void {
+  try {
+    db.exec("PRAGMA wal_checkpoint(PASSIVE)");
+  } catch { /* best-effort */ }
 }
 
 // ---------------------------------------------------------------------------
@@ -191,11 +246,35 @@ export async function ingestPath(
     await new Promise(r => setTimeout(r, 0));
 
     const abortFlags = new Map<number, boolean>();
+    const fileTimeBudgetMs = resolveFileTimeBudgetMs();
 
+    /**
+     * Process one file in two phases.
+     *
+     * Phase 1 (no transaction): stat, read, guards, hash + dedup check, decode,
+     * chunking (tree-sitter) and embedding computation. This phase may await
+     * and yield freely because no SQLite write lock is held.
+     *
+     * Phase 2 (one tight transaction): SAVEPOINT → files → documents → chunks
+     * → vec0 vectors → symbols → RELEASE. Strictly synchronous: no await, no
+     * yields, no setTimeout, no I/O — so the write lock spans a single
+     * event-loop turn instead of being held across turns.
+     */
     async function processFile(walked: WalkedFile, i: number, aborted: Map<number, boolean>): Promise<void> {
         const filePath = walked.path;
         const language = walked.language;
         const fileStart = Date.now();
+        const deadline = fileStart + fileTimeBudgetMs;
+
+        const skipForBudget = (): void => {
+          log(
+            "warn",
+            "ingest.budget",
+            `File exceeded ${fileTimeBudgetMs}ms budget — skipped: ${filePath}`,
+            { path: filePath, budgetMs: fileTimeBudgetMs },
+          );
+          result.errors.push(`Time budget exceeded (${fileTimeBudgetMs}ms): ${filePath}`);
+        };
 
         emitProgressEvent("ingest.progress", {
           current: i + 1,
@@ -234,6 +313,10 @@ export async function ingestPath(
         }, SLOW_FILE_DISPLAY_MS) as unknown as ReturnType<typeof setTimeout>;
 
         try {
+          // ════════════════════════════════════════════════════════════════
+          // PHASE 1 — all heavy work, NO transaction open
+          // ════════════════════════════════════════════════════════════════
+
           // Read file as raw buffer — binary-safe hashing (avoids encoding issues)
           let buf: ArrayBuffer;
           try {
@@ -260,15 +343,11 @@ export async function ingestPath(
             return;
           }
 
-          // ── Per-file SAVEPOINT for atomic DB writes ────────────────────────
-          const spFile = "brain_file_" + generateId();
-          db.exec(`SAVEPOINT ${spFile}`);
-          let fileFailed = false;
-
           const contentHash = hashBuffer(new Uint8Array(buf));
           const size = buf.byteLength;
 
           // ── 5. Content-hash check — skip if unchanged (unless reIndex) ──
+          // Read-only, so it does not need the write transaction.
           if (!reIndex) {
             const existing = db
               .query<{ content_hash: string }, [string]>(
@@ -277,7 +356,6 @@ export async function ingestPath(
               .get(filePath);
 
             if (existing && existing.content_hash === contentHash) {
-              db.exec(`RELEASE SAVEPOINT ${spFile}`);
               result.filesSkipped++;
               return;
             }
@@ -285,11 +363,94 @@ export async function ingestPath(
 
           // Convert buffer to text for document/chunk storage
           const content = new TextDecoder().decode(buf);
+          const totalLines = content.split("\n").length;
 
-          // ── 6. Upsert files table (FK-preserving: keeps rowid for FTS5) ─
+          // IDs are generated up-front so chunking and the write phase agree.
           const fileId = generateId();
+          const docId = generateId();
           const mtime = Date.now();
 
+          // ── 8. Chunk content (symbol extraction happens inside chunker) ──
+          // Tree-sitter runs here, in Phase 1, on a deadline that never starts
+          // a long parse when the budget is nearly exhausted.
+          let chunks: Chunk[];
+          let chunkResult: ChunkResult;
+          try {
+            chunkResult = await chunkContent({
+              documentId: docId,
+              fileId,
+              content,
+              filePath,
+              language,
+              totalLines,
+              deadline,
+            });
+            chunks = chunkResult.chunks;
+          } catch (err) {
+            if (err instanceof FileBudgetExceededError) {
+              skipForBudget();
+              return;
+            }
+            result.errors.push(`Failed to chunk ${filePath}: ${String(err)}`);
+            return;
+          }
+
+          // Slow-file warning after chunking completes
+          const fileElapsed = Date.now() - fileStart;
+          if (fileElapsed > SLOW_FILE_WARN_MS) {
+            log("warn", "ingest", `Slow file (${(fileElapsed / 1000).toFixed(1)}s): ${filePath} (${chunks.length} chunks)`);
+          }
+
+          // Re-check budget after chunking, before any writes.
+          if (Date.now() > deadline) {
+            skipForBudget();
+            return;
+          }
+
+          // ── Embedding computation (async, still Phase 1 — no writes) ─────
+          const preparedEmbeddings = chunks.length > 0
+            ? await computeEmbeddings(
+                db,
+                chunks.map((c) => ({ chunkId: c.id, content: c.content, contentHash: c.contentHash })),
+              )
+            : [];
+
+          // Re-check budget after embedding, before the write phase.
+          if (Date.now() > deadline) {
+            skipForBudget();
+            return;
+          }
+
+          // 30s hard timeout fired during Phase 1 → skip cleanly, no tx.
+          if (aborted.get(i)) {
+            log("warn", "ingest.timeout", `Timeout processing ${filePath}: skipped before writes`, { path: filePath, timeoutMs: FILE_TIMEOUT_MS });
+            return;
+          }
+
+          // Only commit side counters once the file is guaranteed to be written.
+          result.binarySkipped += chunkResult.binarySkipped;
+
+          // ════════════════════════════════════════════════════════════════
+          // PHASE 2 — one tight synchronous write transaction
+          // Rule: no await / no yield / no setTimeout / no I/O between
+          // SAVEPOINT and RELEASE.
+          // ════════════════════════════════════════════════════════════════
+          const spFile = "brain_file_" + generateId();
+
+          const filesIndexedBefore = result.filesIndexed;
+          const docsCreatedBefore = result.documentsCreated;
+          const chunksCreatedBefore = result.chunksCreated;
+          const chunksEmbeddedBefore = result.chunksEmbedded;
+          const revertCounters = (): void => {
+            result.filesIndexed = filesIndexedBefore;
+            result.documentsCreated = docsCreatedBefore;
+            result.chunksCreated = chunksCreatedBefore;
+            result.chunksEmbedded = chunksEmbeddedBefore;
+          };
+
+          db.exec(`SAVEPOINT ${spFile}`);
+
+          // ── 6. Upsert files table (FK-preserving: keeps rowid for FTS5) ─
           try {
             db.run(
               `INSERT INTO files (id, path, content_hash, mtime, lang, size, indexed_at)
@@ -303,19 +464,15 @@ export async function ingestPath(
               [fileId, filePath, contentHash, mtime, language, size],
             );
           } catch (err) {
-            db.exec(`ROLLBACK TO SAVEPOINT ${spFile}`);
+            rollbackSavepoint(db, spFile);
+            revertCounters();
             result.errors.push(`Failed to insert file ${filePath}: ${String(err)}`);
             return;
           }
 
           // ── 7. Insert documents table ──────────────────────────────────
-          const docId = generateId();
           const fileName = filePath.split("/").pop() ?? filePath;
           const filetype = filePath.split(".").pop() ?? "unknown";
-
-          // Snapshot result counters so we can revert this file's increments on abort
-          const docCountBefore = result.documentsCreated;
-          const chunkCountBefore = result.chunksCreated;
 
           try {
             db.run(
@@ -335,59 +492,23 @@ export async function ingestPath(
               result.documentsCreated++;
             }
           } catch (err) {
-            db.exec(`ROLLBACK TO SAVEPOINT ${spFile}`);
+            rollbackSavepoint(db, spFile);
+            revertCounters();
             result.errors.push(`Failed to insert document ${filePath}: ${String(err)}`);
             return;
           }
 
-          // ── 8. Chunk content (symbol extraction happens inside chunker) ──
-          const totalLines = content.split("\n").length;
-
-          let chunks: Chunk[];
-          let chunkResult: ChunkResult;
+          // ── 9. Insert chunks (includes token_count) ────────────────────
+          // Clean up old chunks for this file before inserting new ones
           try {
-            chunkResult = await chunkContent({
-              documentId: docId,
-              fileId,
-              content,
-              filePath,
-              language,
-              totalLines,
-              deadline: fileStart + FILE_TIME_BUDGET_MS,
-            });
-            chunks = chunkResult.chunks;
-            result.binarySkipped += chunkResult.binarySkipped;
+            db.run("DELETE FROM chunks WHERE file_id = ?", [fileId]);
           } catch (err) {
-            if (err instanceof FileBudgetExceededError) {
-              db.exec(`ROLLBACK TO SAVEPOINT ${spFile}`);
-              db.exec(`RELEASE SAVEPOINT ${spFile}`);
-              result.documentsCreated = docCountBefore;
-              result.chunksCreated = chunkCountBefore;
-              log(
-                "warn",
-                "ingest.budget",
-                `File exceeded ${FILE_TIME_BUDGET_MS}ms budget — skipped: ${filePath}`,
-                { path: filePath, budgetMs: FILE_TIME_BUDGET_MS },
-              );
-              result.errors.push(`Time budget exceeded (${FILE_TIME_BUDGET_MS}ms): ${filePath}`);
-              return;
-            }
-            db.exec(`ROLLBACK TO SAVEPOINT ${spFile}`);
-            result.errors.push(`Failed to chunk ${filePath}: ${String(err)}`);
+            rollbackSavepoint(db, spFile);
+            revertCounters();
+            result.errors.push(`Failed to clear chunks ${filePath}: ${String(err)}`);
             return;
           }
 
-          // Slow-file warning after chunking completes
-          const fileElapsed = Date.now() - fileStart;
-          if (fileElapsed > SLOW_FILE_WARN_MS) {
-            log("warn", "ingest", `Slow file (${(fileElapsed / 1000).toFixed(1)}s): ${filePath} (${chunks ? chunks.length : 0} chunks)`);
-          }
-
-          // ── 9. Insert chunks (includes token_count) ───────────────────────
-          // Clean up old chunks for this file before inserting new ones
-          db.run("DELETE FROM chunks WHERE file_id = ?", [fileId]);
-          const newChunkIds: string[] = [];
-          let chunkInsertCount = 0;
           for (const chunk of chunks) {
             try {
               db.run(
@@ -410,45 +531,29 @@ export async function ingestPath(
                   chunk.tokenCount,
                 ],
               );
-
-              result.chunksCreated++;
-              newChunkIds.push(chunk.id);
             } catch (err) {
-              db.exec(`ROLLBACK TO SAVEPOINT ${spFile}`);
+              rollbackSavepoint(db, spFile);
+              revertCounters();
               result.errors.push(
                 `Failed to insert chunk ${chunk.chunkIndex} for ${filePath}: ${String(err)}`,
               );
-              fileFailed = true;
-              break;
+              return;
             }
-            chunkInsertCount++;
-            if (chunkInsertCount % 100 === 0) {
-              await new Promise((r) => setTimeout(r, 0));
-            }
+            result.chunksCreated++;
           }
 
-          if (fileFailed) {
+          // ── 10. Insert vectors (vec0) — synchronous, non-fatal ─────────
+          try {
+            const embedded = insertEmbeddings(db, preparedEmbeddings);
+            result.chunksEmbedded += embedded;
+          } catch (err) {
+            rollbackSavepoint(db, spFile);
+            revertCounters();
+            result.errors.push(`Embedding failed: ${String(err)}`);
             return;
           }
 
-          // ── 10. Embed chunks (vec0) — non-fatal if unavailable ─────────
-          if (newChunkIds.length > 0 && loadVec0(db)) {
-            try {
-              const embedded = await embedChunks(db, newChunkIds);
-              result.chunksEmbedded += embedded;
-            } catch (err) {
-              db.exec(`ROLLBACK TO SAVEPOINT ${spFile}`);
-              result.errors.push(`Embedding failed: ${String(err)}`);
-              fileFailed = true;
-            }
-          }
-
-          if (fileFailed) {
-            return;
-          }
-
-          // ── 11. Populate symbols table (global symbol store) ─────────────
-          let symbolInsertCount = 0;
+          // ── 11. Populate symbols table (global symbol store) ───────────
           for (const chunk of chunks) {
             if (chunk.symbol) {
               try {
@@ -470,22 +575,9 @@ export async function ingestPath(
                 // Silently skip symbol insertion failures
               }
             }
-            symbolInsertCount++;
-            if (symbolInsertCount % 100 === 0) {
-              await new Promise((r) => setTimeout(r, 0));
-            }
           }
 
-          // ── Abort guard: if timeout fired, ROLLBACK (don't commit) and skip counters ──
-          if (aborted.get(i)) {
-            db.exec(`ROLLBACK TO SAVEPOINT ${spFile}`);
-            db.exec(`RELEASE SAVEPOINT ${spFile}`);
-            result.chunksCreated -= result.chunksCreated - chunkCountBefore;
-            result.documentsCreated -= result.documentsCreated - docCountBefore;
-            return;
-          }
-
-          // ── RELEASE per-file SAVEPOINT ─────────────────────────────
+          // ── RELEASE per-file SAVEPOINT (commit of this file) ───────────
           db.exec(`RELEASE SAVEPOINT ${spFile}`);
 
           result.filesIndexed++;
@@ -506,28 +598,53 @@ export async function ingestPath(
         }
     }
 
-    for (const [i, walked] of walkedFiles.entries()) {
-        try {
-            await Promise.race([
-                processFile(walked, i, abortFlags),
-                new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), FILE_TIMEOUT_MS))
-            ]);
-        } catch (err) {
-            if (err instanceof Error && err.message === 'timeout') {
-                abortFlags.set(i, true);
-                emitProgressEvent("ingest.file_timeout", { file: walked.path });
-                log("warn", "ingest.timeout", `Timeout processing ${walked.path}: exceeded ${FILE_TIMEOUT_MS}ms`, { path: walked.path, timeoutMs: FILE_TIMEOUT_MS });
-                result.errors.push(`Timeout after ${FILE_TIMEOUT_MS}ms: ${walked.path}`);
-                continue; // Don't increment filesProcessed — processFile handles it if it completes
-            }
-            throw err;
-        }
+    // Scope auto-checkpoint OFF for the duration of this ingest run.
+    //
+    // SQLite's default auto-checkpoint (1000 pages) can fire inside a commit,
+    // blocking the single-threaded event loop for ~2 s on a large ingest. We
+    // disable it only here and restore the previous value in the finally, so
+    // memory / knowledge / analytics writes keep their normal WAL behaviour
+    // (their WAL must not grow without bound).
+    //
+    // Between files — always after RELEASE, never inside the per-file
+    // SAVEPOINT — a PASSIVE checkpoint copies committed frames into the main
+    // DB and resets the WAL. Because it runs after every file, the WAL never
+    // accumulates more than a single file's frames and can never reach the
+    // 1000-page auto-checkpoint threshold that caused the stall.
+    const previousAutocheckpoint = readWalAutocheckpoint(db);
+    setWalAutocheckpoint(db, 0);
+    try {
+      for (const [i, walked] of walkedFiles.entries()) {
+          try {
+              await Promise.race([
+                  processFile(walked, i, abortFlags),
+                  new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), FILE_TIMEOUT_MS))
+              ]);
+          } catch (err) {
+              if (err instanceof Error && err.message === 'timeout') {
+                  abortFlags.set(i, true);
+                  emitProgressEvent("ingest.file_timeout", { file: walked.path });
+                  log("warn", "ingest.timeout", `Timeout processing ${walked.path}: exceeded ${FILE_TIMEOUT_MS}ms`, { path: walked.path, timeoutMs: FILE_TIMEOUT_MS });
+                  result.errors.push(`Timeout after ${FILE_TIMEOUT_MS}ms: ${walked.path}`);
+                  continue; // Don't increment filesProcessed — processFile handles it if it completes
+              }
+              throw err;
+          }
 
-        // Yield so event loop can handle HTTP requests + tool calls
-        await new Promise(r => setTimeout(r, 0));
+          // Yield so event loop can handle HTTP requests + tool calls
+          await new Promise(r => setTimeout(r, 0));
+
+          // Between-file PASSIVE checkpoint — outside the per-file SAVEPOINT.
+          checkpointWalPassive(db);
+      }
+
+      // Final checkpoint before the pragma is restored (still outside any tx).
+      checkpointWalPassive(db);
+    } finally {
+      setWalAutocheckpoint(db, previousAutocheckpoint);
     }
 
-    // Checkpoint WAL to keep file manageable after large ingests
+    // Truncate the WAL after restoring normal auto-checkpoint behaviour.
     checkpointDatabase(db);
 
     result.durationMs = Date.now() - startTime;

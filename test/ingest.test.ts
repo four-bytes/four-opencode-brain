@@ -6,7 +6,7 @@ import { expect, test, beforeAll, afterAll, describe } from "bun:test";
 import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
-import { openDatabase, createSchema } from "../src/schema";
+import { openDatabase, createSchema, initBrainDatabase } from "../src/schema";
 import { ingestPath } from "../src/ingest";
 import {
   isBinaryContent,
@@ -1041,5 +1041,195 @@ describe("ingestPath — minified/long-line hardening", () => {
         deadline: Date.now() - 1,
       }),
     ).rejects.toBeInstanceOf(FileBudgetExceededError);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Two-phase write isolation (#239)
+//
+// All heavy work (chunking, tree-sitter, embedding computation) must happen
+// before any transaction is opened, and the write transaction must be one
+// tight synchronous block. A file skipped on the budget must leave no rows.
+// ---------------------------------------------------------------------------
+
+describe("ingestPath — two-phase writes (#239)", () => {
+  let phaseDb: Database;
+  const PHASE_DB_PATH = join(TEST_DIR, "phase-brain.db");
+
+  beforeAll(() => {
+    // initBrainDatabase loads vec0 and creates schema, so chunks_vec exists.
+    phaseDb = initBrainDatabase(PHASE_DB_PATH);
+  });
+
+  afterAll(() => {
+    phaseDb.close();
+  });
+
+  // Large enough that reading + hashing alone exceed a 1ms budget on any
+  // machine, while staying below the 2MB file cap and the long-line guard.
+  function largeSourceFile(): string {
+    const lines: string[] = ["export function big(): void {"];
+    for (let i = 0; i < 30_000; i++) lines.push(`  const value${i} = ${i};`);
+    lines.push("}");
+    return lines.join("\n");
+  }
+
+  test("normal file commits files, documents, chunks, vectors and symbols", async () => {
+    const body = Array.from({ length: 400 }, (_, i) => `  const value${i} = ${i};`).join("\n");
+    const filePath = createTestFile(
+      "phase",
+      "normal-symbols.ts",
+      `export function bigFunction(): void {\n${body}\n}\n`,
+    );
+
+    const result = await ingestPath(phaseDb, filePath);
+    expect(result.filesIndexed).toBe(1);
+    expect(result.documentsCreated).toBeGreaterThanOrEqual(1);
+    expect(result.chunksCreated).toBeGreaterThanOrEqual(1);
+    expect(result.chunksEmbedded).toBeGreaterThanOrEqual(1);
+    expect(result.errors.length).toBe(0);
+
+    const fileRows = phaseDb
+      .query<{ c: number }, [string]>("SELECT COUNT(*) AS c FROM files WHERE path = ?")
+      .get(filePath)!.c;
+    expect(fileRows).toBe(1);
+
+    const docRows = phaseDb
+      .query<{ c: number }, [string]>("SELECT COUNT(*) AS c FROM documents WHERE path = ?")
+      .get(filePath)!.c;
+    expect(docRows).toBeGreaterThanOrEqual(1);
+
+    // File is > 1024 tokens, so the chunker extracts tree-sitter symbols.
+    const symbolRows = phaseDb
+      .query<{ c: number }, [string]>("SELECT COUNT(*) AS c FROM symbols WHERE file_path = ?")
+      .get(filePath)!.c;
+    expect(symbolRows).toBeGreaterThanOrEqual(1);
+
+    const vectorRows = phaseDb
+      .query<{ c: number }, [string]>(
+        `SELECT COUNT(*) AS c FROM chunks_vec
+         WHERE chunk_id IN (SELECT id FROM chunks WHERE file_id IN (SELECT id FROM files WHERE path = ?))`,
+      )
+      .get(filePath)!.c;
+    expect(vectorRows).toBeGreaterThanOrEqual(1);
+  });
+
+  test("budget exceeded before writes leaves no partial rows", async () => {
+    const filePath = createTestFile(
+      "phase",
+      "budget-skip-no-partial.ts",
+      largeSourceFile(),
+    );
+
+    const prev = process.env.BRAIN_FILE_TIME_BUDGET_MS;
+    process.env.BRAIN_FILE_TIME_BUDGET_MS = "1";
+    try {
+      const result = await ingestPath(phaseDb, filePath);
+      expect(result.filesIndexed).toBe(0);
+      expect(result.filesSkipped).toBe(0);
+      expect(result.errors.some((e) => e.includes("Time budget exceeded"))).toBe(true);
+
+      const fileRows = phaseDb
+        .query<{ c: number }, [string]>("SELECT COUNT(*) AS c FROM files WHERE path = ?")
+        .get(filePath)!.c;
+      const docRows = phaseDb
+        .query<{ c: number }, [string]>("SELECT COUNT(*) AS c FROM documents WHERE path = ?")
+        .get(filePath)!.c;
+      const chunkRows = phaseDb
+        .query<{ c: number }, [string]>(
+          "SELECT COUNT(*) AS c FROM chunks WHERE document_id IN (SELECT id FROM documents WHERE path = ?)",
+        )
+        .get(filePath)!.c;
+      const symbolRows = phaseDb
+        .query<{ c: number }, [string]>("SELECT COUNT(*) AS c FROM symbols WHERE file_path = ?")
+        .get(filePath)!.c;
+      const vectorRows = phaseDb
+        .query<{ c: number }, [string]>(
+          `SELECT COUNT(*) AS c FROM chunks_vec
+           WHERE chunk_id IN (SELECT id FROM chunks WHERE document_id IN (SELECT id FROM documents WHERE path = ?))`,
+        )
+        .get(filePath)!.c;
+
+      expect(fileRows).toBe(0);
+      expect(docRows).toBe(0);
+      expect(chunkRows).toBe(0);
+      expect(symbolRows).toBe(0);
+      expect(vectorRows).toBe(0);
+    } finally {
+      if (prev === undefined) delete process.env.BRAIN_FILE_TIME_BUDGET_MS;
+      else process.env.BRAIN_FILE_TIME_BUDGET_MS = prev;
+    }
+  });
+
+  test("honours BRAIN_FILE_TIME_BUDGET_MS", async () => {
+    const okPath = createTestFile("phase", "budget-ok.ts", "export const ok = 1;\n");
+    const skipPath = createTestFile(
+      "phase",
+      "budget-small.ts",
+      largeSourceFile(),
+    );
+
+    const prev = process.env.BRAIN_FILE_TIME_BUDGET_MS;
+    try {
+      process.env.BRAIN_FILE_TIME_BUDGET_MS = "5000";
+      const ok = await ingestPath(phaseDb, okPath);
+      expect(ok.filesIndexed).toBe(1);
+      expect(ok.errors.length).toBe(0);
+
+      process.env.BRAIN_FILE_TIME_BUDGET_MS = "1";
+      const skipped = await ingestPath(phaseDb, skipPath);
+      expect(skipped.filesIndexed).toBe(0);
+      expect(skipped.errors.some((e) => e.includes("Time budget exceeded (1ms)"))).toBe(true);
+    } finally {
+      if (prev === undefined) delete process.env.BRAIN_FILE_TIME_BUDGET_MS;
+      else process.env.BRAIN_FILE_TIME_BUDGET_MS = prev;
+    }
+  });
+
+  test("unchanged-file fast path short-circuits without new rows", async () => {
+    const filePath = createTestFile("phase", "fast-path.ts", "export const stable = 42;\n");
+
+    const first = await ingestPath(phaseDb, filePath);
+    expect(first.filesIndexed).toBe(1);
+
+    const chunksAfterFirst = phaseDb
+      .query<{ c: number }, [string]>(
+        "SELECT COUNT(*) AS c FROM chunks WHERE document_id IN (SELECT id FROM documents WHERE path = ?)",
+      )
+      .get(filePath)!.c;
+    expect(chunksAfterFirst).toBeGreaterThanOrEqual(1);
+
+    const second = await ingestPath(phaseDb, filePath);
+    expect(second.filesSkipped).toBe(1);
+    expect(second.filesIndexed).toBe(0);
+    expect(second.chunksCreated).toBe(0);
+
+    const chunksAfterSecond = phaseDb
+      .query<{ c: number }, [string]>(
+        "SELECT COUNT(*) AS c FROM chunks WHERE document_id IN (SELECT id FROM documents WHERE path = ?)",
+      )
+      .get(filePath)!.c;
+    expect(chunksAfterSecond).toBe(chunksAfterFirst);
+  });
+
+  test("restores the previous wal_autocheckpoint after an ingest run (#239)", async () => {
+    const filePath = createTestFile("phase", "wal-restore.ts", "export const wal = 1;\n");
+
+    const readAutocheckpoint = (): number =>
+      phaseDb
+        .query<{ wal_autocheckpoint: number }, []>("PRAGMA wal_autocheckpoint")
+        .get()!.wal_autocheckpoint;
+
+    const previous = readAutocheckpoint();
+    // A value distinct from SQLite's 1000-page default and from the 0 the
+    // ingest sets, so a missing restore is unambiguous.
+    phaseDb.exec("PRAGMA wal_autocheckpoint=777");
+    try {
+      const result = await ingestPath(phaseDb, filePath);
+      expect(result.filesIndexed).toBe(1);
+      expect(readAutocheckpoint()).toBe(777);
+    } finally {
+      phaseDb.exec(`PRAGMA wal_autocheckpoint=${previous}`);
+    }
   });
 });
