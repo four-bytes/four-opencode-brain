@@ -10,6 +10,7 @@ import { openDatabase, createSchema, initBrainDatabase } from "../src/schema";
 import { ingestPath } from "../src/ingest";
 import {
   isBinaryContent,
+  isBinaryExtension,
   isGeneratedArtifact,
   isPathologicalText,
   MAX_LINE_LENGTH,
@@ -891,6 +892,27 @@ describe("isBinaryContent", () => {
     const text = "Line 1\tindented\r\nLine 2\nLine 3\n";
     expect(isBinaryContent(toBytes(text))).toBe(false);
   });
+});
+
+// ---------------------------------------------------------------------------
+// #244: binary extension detection — isBinaryExtension()
+// ---------------------------------------------------------------------------
+
+describe("isBinaryExtension", () => {
+  const cases = [
+    ["flic animation", "animation.fli"],
+    ["flic animation (compressed)", "animation.flc"],
+    ["tracker module (ProTracker)", "song.mod"],
+    ["tracker module (Scream Tracker 3)", "song.s3m"],
+    ["tracker module (FastTracker 2)", "song.xm"],
+    ["tracker module (Impulse Tracker)", "song.it"],
+  ] as const;
+
+  for (const [label, filename] of cases) {
+    test(`returns true for ${label} (${filename})`, () => {
+      expect(isBinaryExtension(filename)).toBe(true);
+    });
+  }
 });
 
 // ---------------------------------------------------------------------------

@@ -130,7 +130,9 @@ const EXTENSION_LANG_MAP: Record<string, string> = {
 const BINARY_EXTENSIONS = new Set([
   ".zip", ".tar", ".gz", ".bz2", ".xz", ".7z", ".rar", ".tgz", ".zst",
   ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".ico", ".webp", ".tiff", ".avif",
+  ".fli", ".flc",
   ".mp3", ".mp4", ".wav", ".ogg", ".avi", ".mov", ".mkv", ".webm", ".flac",
+  ".mod", ".s3m", ".xm", ".it",
   ".so", ".dylib", ".dll", ".o", ".a", ".obj", ".ko",
   ".exe", ".bin", ".out", ".app", ".msi", ".deb", ".rpm",
   ".wasm",
