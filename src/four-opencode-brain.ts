@@ -1,4 +1,4 @@
-import type { Plugin, PluginInput } from "@opencode-ai/plugin";
+import type { PluginInput, Hooks } from "@opencode-ai/plugin";
 import { tool } from "@opencode-ai/plugin";
 import { sessionCache } from "./cache";
 import { log, setSilent, setLogClient } from "./logger";
@@ -62,7 +62,7 @@ import { updateStatus, initStatus, initVersion, setSessionId, stopStatusServer, 
 
 
 
-const _serverPlugin = async (input: PluginInput) => {
+const _serverPlugin = async (input: PluginInput): Promise<Hooks> => {
   const { client, project, directory, $ } = input;
 
   sessionCache.reset();
@@ -115,7 +115,7 @@ const _serverPlugin = async (input: PluginInput) => {
       toast(`Indexing ${fileCount} files… (timeout: ${timeoutS}s)`, "info", "Brain 🧠");
       updateStatus("busy", { text: `ingesting…`, current: 0, total: fileCount });
     } catch {
-      toast(`Indexing ${project?.name ?? "project"}…`, "info", "Brain 🧠");
+      toast(`Indexing ${project ? basename(project.worktree) : "project"}…`, "info", "Brain 🧠");
       updateStatus("busy", { text: "ingesting…" });
     }
 
@@ -731,8 +731,13 @@ const _serverPlugin = async (input: PluginInput) => {
     },
     "chat.message": async (_hookInput, output) => {
       if (_hookInput?.sessionID) setSessionId(_hookInput.sessionID);
-      if (output.message?.role === "user" && output.message?.content) {
-        const stored = await onChatMessage(input, output.message as { role: string; content: string });
+      // UserMessage carries no text field — the prompt lives in the text parts.
+      const content = output.parts
+        .map((part) => (part.type === "text" ? part.text : ""))
+        .filter((text) => text.length > 0)
+        .join("\n");
+      if (output.message?.role === "user" && content) {
+        const stored = await onChatMessage(input, { role: "user", content });
         if (stored && output.parts) {
           output.parts.push({
             id: `brain-mem-stored-${Date.now()}`,

@@ -271,7 +271,7 @@ export async function ingestPath(
           // ── 5. Content-hash check — skip if unchanged (unless reIndex) ──
           if (!reIndex) {
             const existing = db
-              .query<{ content_hash: string }, []>(
+              .query<{ content_hash: string }, [string]>(
                 "SELECT content_hash FROM files WHERE path = ?",
               )
               .get(filePath);
@@ -326,7 +326,7 @@ export async function ingestPath(
 
             // Check if document was actually inserted (not dedup'd)
             const docCount = db
-              .query<{ c: number }, []>(
+              .query<{ c: number }, [string, string]>(
                 "SELECT COUNT(*) AS c FROM documents WHERE path = ? AND content_hash = ?",
               )
               .get(filePath, contentHash)!.c;

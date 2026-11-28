@@ -32,6 +32,7 @@ For local dev guidance, see `AGENTS.local.md` (gitignored, machine-specific).
 - No redundant tool aliases — one tool, one purpose
 
 ## Build Discipline (MANDATORY)
+- Local gate: `bun run typecheck` (`tsc --noEmit`, 0 errors) → `bun test` (green) → `bun run build`
 - EVERY code change ends with: version bump in `package.json` + `bun run build`
 - No merge without current `dist/`
 - `dist/` is gitignored, freshly built on `npm publish`
