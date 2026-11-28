@@ -5,6 +5,7 @@ import { join } from "path";
 const DIST_PATH = join(import.meta.dir, "..", "dist", "four-opencode-brain.js");
 const TUI_DIST_PATH = join(import.meta.dir, "..", "dist", "four-opencode-brain-tui.jsx");
 const PROGRESS_DIST_PATH = join(import.meta.dir, "..", "dist", "progress.jsx");
+const SPINNER_DIST_PATH = join(import.meta.dir, "..", "dist", "spinner.jsx");
 
 describe("dist-integrity", () => {
   const dist = readFileSync(DIST_PATH, "utf-8");
@@ -32,12 +33,13 @@ describe("dist-integrity", () => {
     expect(hasPackageJson).toBe(true);
   });
 
-  test("TUI bundle does not reference broken tui-components import", () => {
+  test("TUI bundle imports TUI components from the plugin lib", () => {
     const tui = readFileSync(TUI_DIST_PATH, "utf-8");
-    expect(tui).not.toContain("tui-components");
+    expect(tui).toContain("@four-bytes/opencode-plugin-lib/tui-components");
   });
 
-  test("progress.jsx is emitted as the inlined replacement", () => {
-    expect(existsSync(PROGRESS_DIST_PATH)).toBe(true);
+  test("inlined progress/spinner artifacts are no longer emitted", () => {
+    expect(existsSync(PROGRESS_DIST_PATH)).toBe(false);
+    expect(existsSync(SPINNER_DIST_PATH)).toBe(false);
   });
 });
