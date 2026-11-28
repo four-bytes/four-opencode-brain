@@ -571,8 +571,19 @@ export async function ingestPath(
                     docId,
                   ],
                 );
-              } catch {
-                // Silently skip symbol insertion failures
+              } catch (err) {
+                rollbackSavepoint(db, spFile);
+                revertCounters();
+                log(
+                  "warn",
+                  "ingest.symbol_insert_failed",
+                  `Symbol insert failed for ${filePath} (${chunk.symbol}): ${String(err)}`,
+                  { path: filePath },
+                );
+                result.errors.push(
+                  `Failed to insert symbol ${chunk.symbol} for ${filePath}: ${String(err)}`,
+                );
+                return;
               }
             }
           }

@@ -18,6 +18,7 @@ import {
 import { isBinaryChunk, chunkContent, FileBudgetExceededError } from "../src/ingest/chunker";
 import { sessionCache } from "../src/cache";
 import { brainSearch } from "../src/search/unified";
+import { setLogClient, setSilent } from "../src/logger";
 
 // ---------------------------------------------------------------------------
 // Test directory setup
@@ -1253,5 +1254,134 @@ describe("ingestPath — two-phase writes (#239)", () => {
     } finally {
       phaseDb.exec(`PRAGMA wal_autocheckpoint=${previous}`);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #247 — a symbol insert failure must roll back the whole file, not commit
+// chunks/vectors while silently dropping symbols.
+// ---------------------------------------------------------------------------
+
+interface CapturedLog {
+  body: {
+    service: string;
+    level: string;
+    message: string;
+    extra?: { path?: string };
+  };
+}
+
+describe("ingestPath — symbol insert failure rolls back the file (#247)", () => {
+  let symDb: Database;
+  let filePath: string;
+
+  // >1024 tokens so the chunker extracts tree-sitter symbols (same shape as #239).
+  const body = Array.from({ length: 400 }, (_, i) => `  const value${i} = ${i};`).join("\n");
+
+  beforeAll(() => {
+    symDb = initBrainDatabase(":memory:");
+    filePath = createTestFile(
+      "symbol-rollback",
+      "symbol-rollback.ts",
+      `export function rollbackTarget(): void {\n${body}\n}\n`,
+    );
+  });
+
+  afterAll(() => {
+    symDb.exec("DROP TRIGGER IF EXISTS symbols_fail_insert");
+    symDb.close();
+  });
+
+  function countRows(sql: string): number {
+    return symDb.query<{ c: number }, [string]>(sql).get(filePath)!.c;
+  }
+
+  test("failed symbol insert leaves no partial rows and reports the file", async () => {
+    // A real runtime failure, not a mocked db. Note: CHECK(0) would NOT work
+    // here — the insert uses OR IGNORE, which silently swallows CHECK
+    // violations. A BEFORE INSERT trigger with RAISE(ABORT) does surface.
+    symDb.exec(
+      "CREATE TRIGGER symbols_fail_insert BEFORE INSERT ON symbols " +
+        "BEGIN SELECT RAISE(ABORT, 'forced symbol insert failure'); END",
+    );
+
+    // No log-capture hook exists in the repo; setLogClient() is the existing
+    // injection point. setSilent(false) guarantees warn is not suppressed by
+    // earlier plugin-initialised tests in the shared test process.
+    const captured: CapturedLog[] = [];
+    setSilent(false);
+    setLogClient({
+      app: {
+        log: (entry: unknown) => {
+          captured.push(entry as CapturedLog);
+          return Promise.resolve();
+        },
+      },
+    });
+
+    try {
+      const result = await ingestPath(symDb, filePath);
+
+      expect(result.filesIndexed).toBe(0);
+      expect(result.chunksCreated).toBe(0);
+      expect(result.errors.some((e) => e.includes("Failed to insert symbol"))).toBe(true);
+      expect(result.errors.some((e) => e.includes(filePath))).toBe(true);
+
+      // The per-file SAVEPOINT must have rolled back everything.
+      expect(countRows("SELECT COUNT(*) AS c FROM files WHERE path = ?")).toBe(0);
+      expect(countRows("SELECT COUNT(*) AS c FROM documents WHERE path = ?")).toBe(0);
+      expect(
+        countRows(
+          "SELECT COUNT(*) AS c FROM chunks WHERE file_id IN (SELECT id FROM files WHERE path = ?)",
+        ),
+      ).toBe(0);
+      expect(countRows("SELECT COUNT(*) AS c FROM symbols WHERE file_path = ?")).toBe(0);
+      expect(
+        countRows(
+          `SELECT COUNT(*) AS c FROM chunks_vec
+           WHERE chunk_id IN (SELECT id FROM chunks WHERE file_id IN (SELECT id FROM files WHERE path = ?))`,
+        ),
+      ).toBe(0);
+
+      // The warning must carry the file path (message + structured extra).
+      const warning = captured.find((e) => e.body?.service === "ingest.symbol_insert_failed");
+      expect(warning).toBeDefined();
+      expect(warning?.body.level).toBe("warn");
+      expect(warning?.body.message).toContain(filePath);
+      expect(warning?.body.extra?.path).toBe(filePath);
+    } finally {
+      setLogClient(null);
+      setSilent(false);
+      symDb.exec("DROP TRIGGER IF EXISTS symbols_fail_insert");
+    }
+  });
+
+  test("re-ingest after restoring a valid symbols table retries cleanly", async () => {
+    const result = await ingestPath(symDb, filePath);
+
+    expect(result.filesIndexed).toBe(1);
+    expect(result.errors.length).toBe(0);
+    expect(result.documentsCreated).toBeGreaterThanOrEqual(1);
+    expect(result.chunksCreated).toBeGreaterThanOrEqual(1);
+    expect(result.chunksEmbedded).toBeGreaterThanOrEqual(1);
+
+    expect(countRows("SELECT COUNT(*) AS c FROM files WHERE path = ?")).toBe(1);
+    expect(
+      countRows("SELECT COUNT(*) AS c FROM documents WHERE path = ?"),
+    ).toBeGreaterThanOrEqual(1);
+    expect(
+      countRows(
+        "SELECT COUNT(*) AS c FROM chunks WHERE file_id IN (SELECT id FROM files WHERE path = ?)",
+      ),
+    ).toBeGreaterThanOrEqual(1);
+    expect(
+      countRows("SELECT COUNT(*) AS c FROM symbols WHERE file_path = ?"),
+    ).toBeGreaterThanOrEqual(1);
+    expect(
+      countRows(
+        `SELECT COUNT(*) AS c FROM chunks_vec
+         WHERE chunk_id IN (SELECT id FROM chunks WHERE file_id IN (SELECT id FROM files WHERE path = ?))`,
+      ),
+    ).toBeGreaterThanOrEqual(1);
   });
 });
